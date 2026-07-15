@@ -5,12 +5,9 @@ import {
   studentDrives,
   studentProfile,
 } from '../../data/platformData'
-import { loadPlacements, loadMasterRows, loadPlacementNotifications, useStoreState } from '../../lib/placeproStore'
+import { loadPlacements, loadMasterRows, loadPlacementNotifications, loadCompanies, loadPlacementForms, loadFormSubmissions, useStoreState } from '../../lib/placeproStore'
 import { getAuthSession } from '../../lib/auth'
 import { careerRoles } from '../../data/careerData'
-
-const appliedCount = studentDrives.filter((drive) => drive.status === 'Applied').length
-const eligibleCount = studentDrives.filter((drive) => drive.status === 'Eligible').length
 
 export function StudentHomePage() {
   const session = getAuthSession()
@@ -27,16 +24,53 @@ export function StudentHomePage() {
   const completedSkills = useMemo(() => progress[role.id] || [], [progress, role])
   const pct = useMemo(() => Math.round((completedSkills.length / role.skills.length) * 100), [completedSkills, role])
 
+  const companiesList = useStoreState(loadCompanies) ?? []
+  const publishedForms = useStoreState(loadPlacementForms) ?? []
+  const submissions = useStoreState(loadFormSubmissions) ?? []
+
   const currentRollNumber = useMemo(() => {
     if (session?.rollNumber) return session.rollNumber
     if (session?.email) {
       const found = masterStudents.find(
-        (s) => s.mailId.toLowerCase() === session.email.toLowerCase()
+        (s) => (s.mailId || '').toLowerCase() === session.email.toLowerCase()
       )
       if (found) return found.rollNumber
     }
     return studentProfile.rollNumber
   }, [session, masterStudents])
+
+  const currentStudent = useMemo(() => {
+    return masterStudents.find(s => s.rollNumber.trim().toUpperCase() === currentRollNumber.trim().toUpperCase())
+  }, [currentRollNumber, masterStudents])
+
+  const studentCgpa = useMemo(() => {
+    return currentStudent ? parseFloat(currentStudent.btechCgpa) || 0.0 : 8.0
+  }, [currentStudent])
+
+  const appliedCount = useMemo(() => {
+    return submissions.filter(s => s.roll.trim().toUpperCase() === currentRollNumber.trim().toUpperCase()).length
+  }, [submissions, currentRollNumber])
+
+  const eligibleCount = useMemo(() => {
+    return companiesList.filter(company => {
+      const matchingForm = publishedForms.find(f =>
+        (f.companyName && f.companyName.toLowerCase() === company.name.toLowerCase()) ||
+        (f.name.toLowerCase().includes(company.name.toLowerCase()))
+      )
+      let minCgpa = 6.0
+      const explicitCgpaStr = company.minCgpa || matchingForm?.companyMinCgpa || ''
+      if (explicitCgpaStr && !Number.isNaN(parseFloat(explicitCgpaStr)) && parseFloat(explicitCgpaStr) > 0) {
+        minCgpa = parseFloat(explicitCgpaStr)
+      } else {
+        const combinedRemarks = `${company.remarks || ''} ${matchingForm?.companyRemarks || ''}`
+        const cgpaMatch = combinedRemarks.match(/cgpa(?:[\s:>=-]|of|min|minimum|req|required|cutoff|at least|or above|for|to|apply|is)*([0-9.]+)/i)
+        if (cgpaMatch && cgpaMatch[1] && !Number.isNaN(parseFloat(cgpaMatch[1])) && parseFloat(cgpaMatch[1]) > 0) {
+          minCgpa = parseFloat(cgpaMatch[1])
+        }
+      }
+      return studentCgpa >= minCgpa
+    }).length
+  }, [companiesList, publishedForms, studentCgpa])
 
   const placements = useStoreState(loadPlacements) ?? []
   const studentPlacement = useMemo(() => {
