@@ -240,10 +240,16 @@ export async function setupDatabase() {
           password_hash VARCHAR(200) NOT NULL,
           role VARCHAR(50) NOT NULL,
           name VARCHAR(200) NOT NULL,
-          associated_id VARCHAR(255)
+          associated_id VARCHAR(255),
+          totp_secret TEXT,
+          security_question TEXT,
+          security_answer_hash TEXT
         );
       `);
       await client.query(`ALTER TABLE users ALTER COLUMN associated_id TYPE VARCHAR(255);`).catch(() => {});
+      await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret TEXT;`).catch(() => {});
+      await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS security_question TEXT;`).catch(() => {});
+      await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS security_answer_hash TEXT;`).catch(() => {});
 
       // 8. Career Roadmaps table
       await client.query(`
