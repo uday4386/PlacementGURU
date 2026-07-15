@@ -1394,6 +1394,7 @@ app.post('/api/master-rows', authenticateToken, async (req, res) => {
     await query('COMMIT');
     res.json({ success: true, count: uniqueRows.length });
   } catch (err) {
+    console.error("MASTER-ROWS UPLOAD ERROR DETAILS (1):", err);
     await query('ROLLBACK');
     res.status(500).json({ error: err.message });
   }
@@ -2177,6 +2178,7 @@ app.post('/api/master-rows', authenticateToken, async (req, res) => {
     await query('COMMIT');
     res.json({ success: true, count: uniqueRows.length });
   } catch (err) {
+    console.error("MASTER-ROWS UPLOAD ERROR DETAILS:", err);
     await query('ROLLBACK');
     res.status(500).json({ error: err.message });
   }
