@@ -93,6 +93,7 @@ export async function setupDatabase() {
       database: process.env.PGDATABASE,
       password: process.env.PGPASSWORD,
       port: process.env.PGPORT ? parseInt(process.env.PGPORT) : undefined,
+      ssl: connectionString.includes('sslmode=require') ? { rejectUnauthorized: false } : undefined,
     });
 
     const client = await pool.connect();

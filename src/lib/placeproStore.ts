@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { loadDraft, saveDraft } from './formDraft'
 import { getAuthToken } from './auth'
 
+export const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
+
 async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
   const token = getAuthToken()
   const headers = new Headers(options.headers || {})
@@ -12,7 +14,8 @@ async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Re
   if (selectedYear) {
     headers.set('X-Academic-Year', selectedYear)
   }
-  return fetch(url, { ...options, headers })
+  const fullUrl = url.startsWith('/api/') ? `${API_BASE}${url}` : url
+  return fetch(fullUrl, { ...options, headers })
 }
 
 export interface MasterStudentRow {

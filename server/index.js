@@ -20,7 +20,11 @@ const app = express();
 app.disable('etag');
 const PORT = process.env.PORT || 5000;
 
-app.use(cors());
+app.use(cors({
+  origin: process.env.CORS_ORIGIN || '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  credentials: true
+}));
 app.use((req, res, next) => {
   const start = Date.now();
   res.on('finish', () => {
