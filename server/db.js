@@ -305,6 +305,7 @@ export async function setupDatabase() {
       // 12. Academic Years table
       await client.query(`
         CREATE TABLE IF NOT EXISTS academic_years (
+          id SERIAL UNIQUE,
           academic_year VARCHAR(50) PRIMARY KEY,
           start_date VARCHAR(50),
           end_date VARCHAR(50),
@@ -317,6 +318,7 @@ export async function setupDatabase() {
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
       `);
+      await client.query(`ALTER TABLE academic_years ADD COLUMN IF NOT EXISTS id SERIAL UNIQUE;`).catch(() => {});
       await client.query(`ALTER TABLE academic_years ADD COLUMN IF NOT EXISTS college_name VARCHAR(255);`).catch(() => {});
       await client.query(`ALTER TABLE academic_years ADD COLUMN IF NOT EXISTS university VARCHAR(255);`).catch(() => {});
       await client.query(`ALTER TABLE academic_years ADD COLUMN IF NOT EXISTS college_location VARCHAR(255);`).catch(() => {});
