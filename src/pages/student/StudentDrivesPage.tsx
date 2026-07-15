@@ -195,8 +195,7 @@ export function StudentDrivesPage() {
       if (form.status === 'Draft') return false
       // Exclude forms already matched to a company drive
       if (matchedFormIds.has(form.id)) return false
-      // Exclude forms that explicitly have a company drive association
-      if (form.hasCompanyDrive) return false
+      // Only exclude if it has a company drive AND was successfully matched to an existing company profile
       return true
     }).map(form => {
       const hasApplied = submissions.some(s => s.formId === form.id && s.roll.trim().toUpperCase() === currentRoll.trim().toUpperCase())
