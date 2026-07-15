@@ -7,6 +7,14 @@
     {
       "source": "/uploads/:path*",
       "destination": "https://placement-guru-backend.onrender.com/uploads/:path*"
+    },
+    {
+      "source": "/((?!api|uploads|assets).*[^/])",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ]
 }
