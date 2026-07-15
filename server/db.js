@@ -199,6 +199,10 @@ export async function setupDatabase() {
           remarks TEXT
         );
       `);
+      await client.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS min_cgpa VARCHAR(50);`).catch(() => {});
+      await client.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS max_backlogs VARCHAR(50);`).catch(() => {});
+      await client.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS form_id VARCHAR(50);`).catch(() => {});
+
 
       // 5. Placements table
       await client.query(`

@@ -14,6 +14,7 @@ import {
   Zap,
   AlertTriangle,
 } from 'lucide-react'
+import { refreshStore } from '../../lib/placeproStore'
 import { getAuthToken } from '../../lib/auth'
 import { useAcademicYear, type AcademicYear } from '../../lib/AcademicYearContext'
 
@@ -180,6 +181,7 @@ export function AdminAcademicYearsPage() {
       if (res.ok) {
         await fetchYears()
         await refetchContext()
+        await refreshStore()
       } else {
         const data = await res.json()
         alert(data.error || 'Failed to delete')

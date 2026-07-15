@@ -173,6 +173,9 @@ const mapCompanyToFrontend = (row) => ({
   jobType: row.job_type,
   academicYear: row.academic_year,
   remarks: row.remarks,
+  minCgpa: row.min_cgpa,
+  maxBacklogs: row.max_backlogs,
+  formId: row.form_id,
 });
 
 const mapPlacementToFrontend = (row) => ({
@@ -1448,10 +1451,10 @@ app.post('/api/companies', authenticateToken, async (req, res) => {
 
     for (const c of uniqueList) {
       await query(`
-        INSERT INTO companies (id, name, sector, type, location, drives, hires, package, status, mode, job_type, academic_year, remarks)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        INSERT INTO companies (id, name, sector, type, location, drives, hires, package, status, mode, job_type, academic_year, remarks, min_cgpa, max_backlogs, form_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
       `, [
-        c.id, c.name, c.sector, c.type, c.location, c.drives, c.hires, c.package, c.status, c.mode, c.jobType, req.academicYear, c.remarks
+        c.id, c.name, c.sector, c.type, c.location, c.drives, c.hires, c.package, c.status, c.mode, c.jobType, req.academicYear, c.remarks, c.minCgpa, c.maxBacklogs, c.formId
       ]);
     }
     await query('COMMIT');
@@ -2259,10 +2262,10 @@ app.post('/api/companies', authenticateToken, async (req, res) => {
 
     for (const c of uniqueList) {
       await query(`
-        INSERT INTO companies (id, name, sector, type, location, drives, hires, package, status, mode, job_type, academic_year, remarks)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        INSERT INTO companies (id, name, sector, type, location, drives, hires, package, status, mode, job_type, academic_year, remarks, min_cgpa, max_backlogs, form_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
       `, [
-        c.id, c.name, c.sector, c.type, c.location, c.drives, c.hires, c.package, c.status, c.mode, c.jobType, req.academicYear, c.remarks
+        c.id, c.name, c.sector, c.type, c.location, c.drives, c.hires, c.package, c.status, c.mode, c.jobType, req.academicYear, c.remarks, c.minCgpa, c.maxBacklogs, c.formId
       ]);
     }
     await query('COMMIT');
