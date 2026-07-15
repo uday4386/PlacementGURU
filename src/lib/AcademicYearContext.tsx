@@ -1,4 +1,5 @@
 import React, { useState, useEffect, createContext, useContext, useCallback } from 'react'
+import { getAuthSession } from './auth'
 
 const STORAGE_KEY = "placepro-selected-academic-year"
 
@@ -53,6 +54,10 @@ function getDefaultAcademicYear(): string {
 
 function getInitialAcademicYear(): string {
   try {
+    const session = getAuthSession()
+    if (session && session.role !== 'admin' && session.academicYear) {
+      return session.academicYear
+    }
     const stored = localStorage.getItem(STORAGE_KEY) ?? ""
     if (isValidAcademicYear(stored)) return stored
   } catch {}
@@ -83,6 +88,12 @@ export function AcademicYearProvider({ children }: { children: React.ReactNode }
         const data: AcademicYear[] = await res.json()
         setAcademicYears(data)
         
+        const session = getAuthSession()
+        if (session && session.role !== 'admin' && session.academicYear) {
+          setSelectedYearState(session.academicYear)
+          return
+        }
+
         const stored = localStorage.getItem(STORAGE_KEY)
         const activeEntry = data.find(y => y.status === 'ACTIVE')
         const yearStrings = data.map(y => y.academic_year)
