@@ -470,18 +470,21 @@ export async function setupDatabase() {
           }
         }
 
-        // Seed default academic years
-        const yearsRes = await client.query('SELECT COUNT(*) FROM academic_years');
-        if (parseInt(yearsRes.rows[0].count) === 0) {
-          console.log('Seeding initial academic years...');
-          await client.query(`
-            INSERT INTO academic_years (academic_year, start_date, end_date, status, is_default, college_name, university, college_location, college_website)
-            VALUES 
-              ('2024-2025', '2024-06-01', '2025-05-31', 'ARCHIVED', false, 'PlaceGO! College', 'State University', 'Main Campus', 'https://college.edu'),
-              ('2025-2026', '2025-06-01', '2026-05-31', 'ACTIVE', true, 'PlaceGO! College', 'State University', 'Main Campus', 'https://college.edu'),
-              ('2026-2027', '2026-06-01', '2027-05-31', 'UPCOMING', false, 'PlaceGO! College', 'State University', 'Main Campus', 'https://college.edu')
-          `);
-          console.log('Seeded default academic years.');
+        // Seed default academic years if they don't exist
+        const defaultYears = [
+          ['2024-2025', '2024-06-01', '2025-05-31', 'ARCHIVED', false],
+          ['2025-2026', '2025-06-01', '2026-05-31', 'ACTIVE', true],
+          ['2026-2027', '2026-06-01', '2027-05-31', 'UPCOMING', false]
+        ];
+        for (const [year, start, end, status, isDefault] of defaultYears) {
+          const existCheck = await client.query('SELECT 1 FROM academic_years WHERE academic_year = $1', [year]);
+          if (existCheck.rows.length === 0) {
+            console.log(`Seeding academic year ${year}...`);
+            await client.query(`
+              INSERT INTO academic_years (academic_year, start_date, end_date, status, is_default, college_name, university, college_location, college_website)
+              VALUES ($1, $2, $3, $4, $5, 'PlaceGO! College', 'State University', 'Main Campus', 'https://college.edu')
+            `, [year, start, end, status, isDefault]);
+          }
         }
 
         // Seed default placement forms
