@@ -417,12 +417,20 @@ app.post('/api/auth/enable-2fa', authenticateToken, async (req, res) => {
     // Check if student was in users table. If not, we might need to insert them.
     const userCheck = await query('SELECT * FROM users WHERE role = $1 AND UPPER(associated_id) = UPPER($2)', ['student', rollNumber]);
     if (userCheck.rows.length === 0) {
-      // Create user entry
+      // Create or update user entry safely using ON CONFLICT (UPSERT)
       const passwordHash = await bcrypt.hash(rollNumber, 10); // fallback password hash
-      await query(
-        'INSERT INTO users (username, password_hash, role, name, associated_id, totp_secret, security_question, security_answer_hash) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-        [req.user.email, passwordHash, 'student', req.user.name, rollNumber, secret, securityQuestion, answerHash]
-      );
+      await query(`
+        INSERT INTO users (username, password_hash, role, name, associated_id, totp_secret, security_question, security_answer_hash)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (username) 
+        DO UPDATE SET 
+          totp_secret = EXCLUDED.totp_secret,
+          security_question = EXCLUDED.security_question,
+          security_answer_hash = EXCLUDED.security_answer_hash,
+          role = EXCLUDED.role,
+          name = EXCLUDED.name,
+          associated_id = EXCLUDED.associated_id
+      `, [req.user.email, passwordHash, 'student', req.user.name, rollNumber, secret, securityQuestion, answerHash]);
     }
     
     // Generate final token
