@@ -304,9 +304,17 @@ export async function setupDatabase() {
           end_date VARCHAR(50),
           status VARCHAR(20),
           is_default BOOLEAN DEFAULT false,
+          college_name VARCHAR(255),
+          university VARCHAR(255),
+          college_location VARCHAR(255),
+          college_website VARCHAR(255),
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
       `);
+      await client.query(`ALTER TABLE academic_years ADD COLUMN IF NOT EXISTS college_name VARCHAR(255);`).catch(() => {});
+      await client.query(`ALTER TABLE academic_years ADD COLUMN IF NOT EXISTS university VARCHAR(255);`).catch(() => {});
+      await client.query(`ALTER TABLE academic_years ADD COLUMN IF NOT EXISTS college_location VARCHAR(255);`).catch(() => {});
+      await client.query(`ALTER TABLE academic_years ADD COLUMN IF NOT EXISTS college_website VARCHAR(255);`).catch(() => {});
 
       // 13. Master History table
       await client.query(`
