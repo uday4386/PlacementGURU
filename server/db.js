@@ -240,9 +240,10 @@ export async function setupDatabase() {
           password_hash VARCHAR(200) NOT NULL,
           role VARCHAR(50) NOT NULL,
           name VARCHAR(200) NOT NULL,
-          associated_id VARCHAR(50)
+          associated_id VARCHAR(255)
         );
       `);
+      await client.query(`ALTER TABLE users ALTER COLUMN associated_id TYPE VARCHAR(255);`).catch(() => {});
 
       // 8. Career Roadmaps table
       await client.query(`
