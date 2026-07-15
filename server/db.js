@@ -96,14 +96,9 @@ export async function setupDatabase() {
       await pgClient.end();
     }
 
-    // Initialize pool for the target database
+    // Initialize pool for the target database using connectionString directly
     pool = new pg.Pool({
       connectionString,
-      user: process.env.PGUSER,
-      host: process.env.PGHOST,
-      database: process.env.PGDATABASE,
-      password: process.env.PGPASSWORD,
-      port: process.env.PGPORT ? parseInt(process.env.PGPORT) : undefined,
       ssl: connectionString.includes('sslmode=require') ? { rejectUnauthorized: false } : undefined,
     });
 
@@ -390,8 +385,6 @@ export async function setupDatabase() {
       }
 
       // Only seed sample data if this is a fresh database (no users exist yet)
-      // Once users have been created, we never auto-seed sample students/companies/placements/forms
-      // even if those tables are empty (e.g. after a data wipe).
       const dbInitCheck = await client.query('SELECT COUNT(*) FROM users');
       const isDatabaseInitialized = parseInt(dbInitCheck.rows[0].count) > 0;
 
@@ -488,15 +481,13 @@ export async function setupDatabase() {
             `, f);
           }
         }
-      } else {
-        console.log('Database already initialized (users exist). Skipping sample data seeding.');
       }
-
-      console.log('Schema tables verified/created. Database seeding is disabled for testing.');
+      console.log('Schema tables verified/created. Database seeding complete.');
     } finally {
       client.release();
     }
   } catch (err) {
+    console.error('DATABASE SETUP ERROR DETAILS:', err);
     console.warn('\n======================================================================');
     console.warn('PostgreSQL connection failed. Falling back to Local Mock JSON Database.');
     console.warn('======================================================================\n');
