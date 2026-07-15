@@ -377,26 +377,37 @@ export async function setupDatabase() {
       }
 
       // Seed default credentials
-      const usersRes = await client.query('SELECT COUNT(*) FROM users');
-      if (parseInt(usersRes.rows[0].count) === 0) {
-        console.log('Seeding initial users for login authentication...');
+      // Seed default credentials
+      const adminCheck = await client.query("SELECT 1 FROM users WHERE username = 'admin@college.edu'");
+      if (adminCheck.rows.length === 0) {
+        console.log('Seeding default admin user...');
         const adminHash = await bcrypt.hash('admin123', 10);
+        await client.query(`
+          INSERT INTO users (username, password_hash, role, name, associated_id)
+          VALUES ('admin@college.edu', $1, 'admin', 'Admin User', NULL)
+        `, [adminHash]);
+        console.log('Seeded default admin user credentials.');
+      }
+
+      const defaultUsersCheck = await client.query("SELECT 1 FROM users WHERE username = 'student@college.edu'");
+      if (defaultUsersCheck.rows.length === 0) {
+        console.log('Seeding default student and coordinator users...');
         const studentHash = await bcrypt.hash('student123', 10);
         const coordHash = await bcrypt.hash('coordinator123', 10);
 
         await client.query(`
           INSERT INTO users (username, password_hash, role, name, associated_id)
           VALUES 
-            ('admin@college.edu', $1, 'admin', 'Admin User', NULL),
-            ('student@college.edu', $2, 'student', 'Aarav Sharma', '21JR1A0501'),
-            ('coordinator-cse@college.edu', $3, 'coordinator', 'CSE Coordinator', 'Computer Science Engineering'),
-            ('coordinator-cseai@college.edu', $3, 'coordinator', 'CSE AI Coordinator', 'Computer Science Engineering - Artificial Intelligence'),
-            ('coordinator-cseml@college.edu', $3, 'coordinator', 'CSE ML Coordinator', 'Computer Science Engineering - Machine Learning'),
-            ('coordinator-it@college.edu', $3, 'coordinator', 'IT Coordinator', 'Information Technology'),
-            ('coordinator-ece@college.edu', $3, 'coordinator', 'ECE Coordinator', 'Electronics and Communication Engineering'),
-            ('coordinator-eee@college.edu', $3, 'coordinator', 'EEE Coordinator', 'Electrical and Electronics Engineering')
-        `, [adminHash, studentHash, coordHash]);
-        console.log('Seeded default user credentials.');
+            ('student@college.edu', $1, 'student', 'Aarav Sharma', '21JR1A0501'),
+            ('coordinator-cse@college.edu', $2, 'coordinator', 'CSE Coordinator', 'Computer Science Engineering'),
+            ('coordinator-cseai@college.edu', $2, 'coordinator', 'CSE AI Coordinator', 'Computer Science Engineering - Artificial Intelligence'),
+            ('coordinator-cseml@college.edu', $2, 'coordinator', 'CSE ML Coordinator', 'Computer Science Engineering - Machine Learning'),
+            ('coordinator-it@college.edu', $2, 'coordinator', 'IT Coordinator', 'Information Technology'),
+            ('coordinator-ece@college.edu', $2, 'coordinator', 'ECE Coordinator', 'Electronics and Communication Engineering'),
+            ('coordinator-eee@college.edu', $2, 'coordinator', 'EEE Coordinator', 'Electrical and Electronics Engineering')
+          ON CONFLICT (username) DO NOTHING
+        `, [studentHash, coordHash]);
+        console.log('Seeded default student and coordinator credentials.');
       }
 
       // Only seed sample data if this is a fresh database (no users exist yet)
