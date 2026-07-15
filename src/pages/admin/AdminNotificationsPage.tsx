@@ -1,26 +1,16 @@
-import { useState } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { Bell, Check, CheckCheck, Info, AlertTriangle, Megaphone, Send, Globe } from 'lucide-react'
+import {
+  loadPlacementNotifications,
+  savePlacementNotifications,
+  loadMasterRows,
+  useStoreState,
+  type PlacementNotification
+} from '../../lib/placeproStore'
+import { getShortBranchName } from '../../lib/branchUtils'
+import { useAcademicYear } from '../../lib/AcademicYearContext'
 
 type NotificationType = 'info' | 'success' | 'warning' | 'announcement'
-
-interface Notification {
-  id: string
-  title: string
-  message: string
-  type: NotificationType
-  time: string
-  read: boolean
-}
-
-const initialNotifications: Notification[] = [
-  { id: '1', title: 'Amazon drive shortlist released', message: '28 students have been shortlisted for the Amazon SDE-1 drive. Round 2 starts July 28.', type: 'info', time: '2 hours ago', read: false },
-  { id: '2', title: 'CSE master data uploaded', message: 'Coordinator Rao uploaded the student master sheet for CSE 2026 batch. 312 records processed.', type: 'success', time: '4 hours ago', read: false },
-  { id: '3', title: '12 pending registrations', message: '12 students from ME department have incomplete registrations. Deadline is July 31.', type: 'warning', time: '1 day ago', read: false },
-  { id: '4', title: 'New company: Google added', message: 'Google has been added to the recruiting companies list. Drive scheduled for August 2026.', type: 'info', time: '2 days ago', read: true },
-  { id: '5', title: 'Placement orientation announcement', message: 'Placement orientation scheduled for July 15 at Main Auditorium. All 2026 batch students invited.', type: 'announcement', time: '3 days ago', read: true },
-  { id: '6', title: 'Report generated: Branch-wise analysis', message: 'The branch-wise placement analysis report has been generated and is ready for download.', type: 'success', time: '3 days ago', read: true },
-  { id: '7', title: 'TCS eligibility criteria updated', message: 'Minimum CGPA for TCS changed from 6.0 to 6.5. 98 students are now ineligible.', type: 'warning', time: '5 days ago', read: true },
-]
 
 const typeIcons: Record<NotificationType, typeof Bell> = {
   info: Info,
@@ -36,8 +26,29 @@ const typeColors: Record<NotificationType, string> = {
   announcement: 'bg-primary/10 text-primary',
 }
 
+function formatTime(isoString: string) {
+  try {
+    const date = new Date(isoString)
+    const now = new Date()
+    const diffMs = now.getTime() - date.getTime()
+    const diffMins = Math.floor(diffMs / 60000)
+    if (diffMins < 1) return 'Just now'
+    if (diffMins < 60) return `${diffMins}m ago`
+    const diffHours = Math.floor(diffMins / 60)
+    if (diffHours < 24) return `${diffHours}h ago`
+    const diffDays = Math.floor(diffHours / 24)
+    if (diffDays === 1) return 'Yesterday'
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  } catch {
+    return 'Recently'
+  }
+}
+
 export function AdminNotificationsPage() {
-  const [notifications, setNotifications] = useState(initialNotifications)
+  const { selectedYear } = useAcademicYear()
+  const liveNotifications = useStoreState(loadPlacementNotifications) ?? []
+  const masterRows = useStoreState(loadMasterRows) ?? []
+
   const [activeTab, setActiveTab] = useState<'inbox' | 'broadcast'>('inbox')
   const [filter, setFilter] = useState<'all' | 'unread'>('all')
   const [toastMessage, setToastMessage] = useState<string | null>(null)
@@ -52,8 +63,67 @@ export function AdminNotificationsPage() {
   const [message, setMessage] = useState('')
   const [sending, setSending] = useState(false)
 
-  const unreadCount = notifications.filter((n) => !n.read).length
-  const displayed = filter === 'unread' ? notifications.filter((n) => !n.read) : notifications
+  const [adminReadIds, setAdminReadIds] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('placepro-admin-read-notifs') || '[]')
+    } catch {
+      return []
+    }
+  })
+
+  // Group notifications dynamically: group announcements/broadcasts, but show individual student placement selections separately
+  const inboxList = useMemo(() => {
+    const grouped = new Map<string, any>()
+    const list: any[] = []
+
+    liveNotifications.forEach(n => {
+      const isCustomBroadcast = ['info', 'warning', 'success', 'announcement', 'Broadcast'].includes(n.type)
+      
+      if (isCustomBroadcast) {
+        // Group broadcasts by company (subject) + role (message) + type + createdAt day/hour
+        const createdAtStr = n.createdAt || n.date || ''
+        const key = `${n.company}-${n.role}-${n.type}-${createdAtStr.substring(0, 16)}`
+        if (!grouped.has(key)) {
+          grouped.set(key, {
+            id: n.id,
+            title: n.company,
+            message: n.role,
+            type: n.type,
+            time: createdAtStr,
+            read: adminReadIds.includes(n.id),
+            count: 1,
+            originalList: [n]
+          })
+        } else {
+          const item = grouped.get(key)
+          item.count++
+          item.originalList.push(n)
+          if (!adminReadIds.includes(n.id)) {
+            item.read = false
+          }
+        }
+      } else {
+        // Do NOT group student selections; add them individually
+        const createdAtStr = n.createdAt || n.date || ''
+        list.push({
+          id: n.id,
+          title: `🎉 Selected at ${n.company}`,
+          message: `${n.studentName} (${n.rollNumber}) selected as ${n.role} with package ${n.package}`,
+          type: 'success',
+          time: createdAtStr,
+          read: adminReadIds.includes(n.id),
+          count: 1,
+          originalList: [n]
+        })
+      }
+    })
+
+    const combined = [...list, ...Array.from(grouped.values())]
+    return combined.sort((a, b) => (b.time || '').localeCompare(a.time || ''))
+  }, [liveNotifications, adminReadIds])
+
+  const unreadCount = inboxList.filter((n) => !n.read).length
+  const displayed = filter === 'unread' ? inboxList.filter((n) => !n.read) : inboxList
 
   function showToast(msg: string) {
     setToastMessage(msg)
@@ -61,14 +131,39 @@ export function AdminNotificationsPage() {
   }
 
   function markAllRead() {
-    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
+    const allIds = liveNotifications.map((n) => n.id)
+    localStorage.setItem('placepro-admin-read-notifs', JSON.stringify(allIds))
+    setAdminReadIds(allIds)
     showToast('All messages marked as read.')
   }
 
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const allIds = liveNotifications.map((n) => n.id)
+      localStorage.setItem('placepro-admin-read-notifs', JSON.stringify(allIds))
+      setAdminReadIds(allIds)
+    }, 600)
+    return () => clearTimeout(timer)
+  }, [liveNotifications.length])
+
   function toggleRead(id: string) {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, read: !n.read } : n)),
-    )
+    // Find the item in our grouped displayed list
+    const foundGroup = inboxList.find(item => item.id === id)
+    if (!foundGroup) return
+
+    const idsToToggle = new Set<string>(foundGroup.originalList.map((n: any) => String(n.id)))
+    const currentRead = new Set<string>(adminReadIds)
+    
+    let isCurrentlyRead = foundGroup.read
+    if (isCurrentlyRead) {
+      idsToToggle.forEach(toggleId => currentRead.delete(String(toggleId)))
+    } else {
+      idsToToggle.forEach(toggleId => currentRead.add(String(toggleId)))
+    }
+    
+    const updated = Array.from(currentRead)
+    localStorage.setItem('placepro-admin-read-notifs', JSON.stringify(updated))
+    setAdminReadIds(updated)
   }
 
   function handleBroadcast(e: React.FormEvent) {
@@ -82,29 +177,60 @@ export function AdminNotificationsPage() {
     else if (audience === 'Specific Department') targetSummary = `Department: ${targetDept}`
     else if (audience === 'Specific Eligibility Group') targetSummary = `Group: ${eligibilityGroup}`
 
-    let simulatedCount = 1540
-    if (targetBranch === 'CSE') simulatedCount = 312
-    else if (targetBranch === 'ECE') simulatedCount = 240
-    else if (targetBranch === 'IT') simulatedCount = 180
-
-    setTimeout(() => {
-      // Append to local notifications inbox history
-      const newNotif: Notification = {
-        id: `NOTIF-${notifications.length + 1}`,
-        title: subject,
-        message: `${message} (Targeted to: ${targetSummary})`,
-        type: notifType.includes('Open') ? 'info' : notifType.includes('Closing') ? 'warning' : 'announcement',
-        time: 'Just now',
-        read: false,
+    // Compute target students dynamically from master data
+    let targetStudents = masterRows
+    if (audience === 'Specific Branch') {
+      targetStudents = masterRows.filter(s => getShortBranchName(s.branch) === targetBranch)
+    } else if (audience === 'Specific Department') {
+      targetStudents = masterRows.filter(s => {
+        const branchName = (s.branch || '').toLowerCase()
+        const deptName = targetDept.toLowerCase()
+        return branchName.includes(deptName) || getShortBranchName(s.branch).toLowerCase().includes(deptName)
+      })
+    } else if (audience === 'Specific Eligibility Group') {
+      if (eligibilityGroup === 'CGPA >= 8.0') {
+        targetStudents = masterRows.filter(s => parseFloat(s.btechCgpa || '0') >= 8.0)
+      } else if (eligibilityGroup === 'CGPA >= 7.0') {
+        targetStudents = masterRows.filter(s => parseFloat(s.btechCgpa || '0') >= 7.0)
+      } else if (eligibilityGroup === 'Backlogs = 0') {
+        targetStudents = masterRows.filter(s => {
+          const backVal = (s.noOfBacklogs || s.activeBacklogs || '').trim()
+          return !backVal || backVal === '0' || backVal.toLowerCase() === 'no'
+        })
       }
+    }
 
-      setNotifications([newNotif, ...notifications])
+    if (targetStudents.length === 0) {
+      setSending(false)
+      showToast(`No students in active academic year match target ${targetSummary}!`)
+      return
+    }
+
+    setTimeout(async () => {
+      // Create new dynamic notification for each matched student
+      const typeCode = notifType.includes('Open') ? 'info' : notifType.includes('Closing') ? 'warning' : 'announcement'
+      
+      const newNotifs: PlacementNotification[] = targetStudents.map(student => ({
+        id: `PNOTIF-${Date.now()}-${student.rollNumber}`,
+        rollNumber: student.rollNumber.trim().toUpperCase(),
+        studentName: student.fullName || `${student.firstName} ${student.lastName}`.trim(),
+        company: subject, // subject
+        role: message, // message
+        package: '',
+        date: new Date().toISOString().split('T')[0],
+        type: typeCode,
+        createdAt: new Date().toISOString(),
+        read: false,
+        academicYear: selectedYear
+      }))
+
+      await savePlacementNotifications([...newNotifs, ...liveNotifications])
       setSending(false)
       setSubject('')
       setMessage('')
       setActiveTab('inbox')
-      showToast(`Bulk email sent successfully to all ${simulatedCount} members of ${targetSummary}!`)
-    }, 1200)
+      showToast(`Broadcast successfully sent and saved to all ${targetStudents.length} matching students!`)
+    }, 300)
   }
 
   return (
@@ -180,8 +306,15 @@ export function AdminNotificationsPage() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-start justify-between gap-2">
-                    <h3 className={`text-sm ${!n.read ? 'font-bold' : 'font-medium'}`}>{n.title}</h3>
-                    <span className="shrink-0 text-xs text-muted-foreground">{n.time}</span>
+                    <h3 className={`text-sm flex flex-wrap items-center gap-2 ${!n.read ? 'font-bold' : 'font-medium'}`}>
+                      {n.title}
+                      {n.count > 1 && (
+                        <span className="inline-block rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground font-semibold">
+                          Broadcast to {n.count} students
+                        </span>
+                      )}
+                    </h3>
+                    <span className="shrink-0 text-xs text-muted-foreground">{formatTime(n.time)}</span>
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground leading-relaxed">{n.message}</p>
                 </div>
@@ -191,7 +324,7 @@ export function AdminNotificationsPage() {
                   className="shrink-0 rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer"
                   title={n.read ? 'Mark as unread' : 'Mark as read'}
                 >
-                  {n.read ? <Bell className="h-4 w-4" /> : <Check className="h-4 w-4" />}
+                  {n.read ? <Check className="h-4 w-4 text-success" /> : <Bell className="h-4 w-4" />}
                 </button>
               </div>
             )

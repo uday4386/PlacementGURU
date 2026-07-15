@@ -31,6 +31,12 @@ import {
   useStoreState,
 } from '../../lib/placeproStore'
 import { getBranchAbbreviation } from '../../lib/utils'
+import {
+  getAcademicYearFromDate,
+  getAcademicYearFromYop,
+  normalizeAcademicYear,
+  useAcademicYear,
+} from '../../lib/AcademicYearContext'
 
 const statusColors: Record<string, string> = {
   Active: 'bg-emerald-500/10 text-emerald-600',
@@ -92,9 +98,31 @@ const modeIcons: Record<string, typeof Monitor> = {
 }
 
 export function AdminEligibilityPage() {
-  const companies = useStoreState(loadCompanies) ?? []
-  const placements = useStoreState(loadPlacements) ?? []
-  const masterRows = useStoreState(loadMasterRows) ?? []
+  const { selectedYear } = useAcademicYear()
+  const allCompanies = useStoreState(loadCompanies) ?? []
+  const allPlacements = useStoreState(loadPlacements) ?? []
+  const allMasterRows = useStoreState(loadMasterRows) ?? []
+  const companies = useMemo(
+    () =>
+      allCompanies.filter(
+        (company) => normalizeAcademicYear(company.academicYear) === selectedYear,
+      ),
+    [allCompanies, selectedYear],
+  )
+  const placements = useMemo(
+    () =>
+      allPlacements.filter(
+        (placement) => (placement.academicYear || getAcademicYearFromDate(placement.date)) === selectedYear,
+      ),
+    [allPlacements, selectedYear],
+  )
+  const masterRows = useMemo(
+    () =>
+      allMasterRows.filter(
+        (row) => (row.academicYear || getAcademicYearFromYop(row.btechYop)) === selectedYear,
+      ),
+    [allMasterRows, selectedYear],
+  )
   const [search, setSearch] = useState('')
   const [filterJobType, setFilterJobType] = useState('All')
   const [filterStatus, setFilterStatus] = useState('All')
@@ -289,7 +317,7 @@ export function AdminEligibilityPage() {
           </style>
         </head>
         <body>
-          <h1>PlacePro - TPO Dashboard Report</h1>
+          <h1>PlaceGO! - TPO Dashboard Report</h1>
           <div class="summary">
             <span>Total Companies: <strong>${totalCompanies}</strong></span>
             <span>Total Selections: <strong>${totalSelections}</strong></span>
@@ -303,7 +331,7 @@ export function AdminEligibilityPage() {
             <thead><tr>${headerRow}</tr></thead>
             <tbody>${bodyRows}</tbody>
           </table>
-          <div class="footer">PlacePro Placement Portal &copy; 2026 - Official Report</div>
+          <div class="footer">PlaceGO! Placement Portal &copy; 2026 - Official Report</div>
           <script>
             window.onload = function() {
               window.print();
@@ -471,9 +499,9 @@ export function AdminEligibilityPage() {
       </div>
 
       {/* Main Content */}
-      <div className="grid gap-6 lg:grid-cols-4">
+      <div className="grid gap-6 lg:grid-cols-4 print:block">
         {/* Company Analytics Table */}
-        <div className="lg:col-span-3 card-surface overflow-hidden">
+        <div className="lg:col-span-3 card-surface overflow-hidden print:mb-6">
           <div className="border-b border-border px-5 py-4 flex items-center justify-between">
             <h3 className="font-semibold text-foreground flex items-center gap-2">
               <BarChart3 className="h-4 w-4 text-primary" /> Company-wise Placement Analytics
@@ -602,14 +630,14 @@ export function AdminEligibilityPage() {
 
         {/* Department Breakdown Side Panel */}
         <div className="space-y-4">
-          <div className="card-surface p-5">
+          <div className="card-surface p-5 print:break-inside-avoid">
             <h3 className="font-semibold text-foreground flex items-center gap-2 mb-4">
               <Users className="h-4 w-4 text-primary" /> Branch-wise Breakdown
             </h3>
             {globalDeptBreakdown.length > 0 ? (
               <div className="space-y-3">
                 {globalDeptBreakdown.map((dept) => (
-                  <div key={dept.branch}>
+                  <div key={dept.branch} className="print:break-inside-avoid">
                     <div className="flex items-center justify-between text-xs mb-1">
                       <span className="font-bold text-foreground">{dept.branch}</span>
                       <span className="text-muted-foreground">
@@ -641,7 +669,7 @@ export function AdminEligibilityPage() {
           </div>
 
           {/* Branch Placement Share Pie Chart */}
-          <div className="card-surface p-5">
+          <div className="card-surface p-5 print:break-inside-avoid">
             <h3 className="font-semibold text-foreground flex items-center gap-2 mb-4">
               <BarChart3 className="h-4 w-4 text-primary" /> Placed Students Share
             </h3>
@@ -659,6 +687,7 @@ export function AdminEligibilityPage() {
                         innerRadius={35}
                         outerRadius={55}
                         paddingAngle={2}
+                        isAnimationActive={false}
                       >
                         {globalDeptBreakdown
                           .filter((d) => d.placed > 0)

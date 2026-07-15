@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { GraduationCap, Search, Building2, Clock, X, Download } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import { getAuthSession } from '../../lib/auth'
@@ -20,7 +21,8 @@ export function CoordinatorEligibilityPage() {
   const publishedForms = useStoreState(loadPlacementForms) ?? []
   const submissions = useStoreState(loadFormSubmissions) ?? []
 
-  const [search, setSearch] = useState('')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const search = searchParams.get('q') || ''
   const [selectedDriveForModal, setSelectedDriveForModal] = useState<any | null>(null)
   const [modalTab, setModalTab] = useState<'eligible' | 'applied'>('eligible')
 
@@ -38,17 +40,48 @@ export function CoordinatorEligibilityPage() {
         f.name.toLowerCase().includes(company.name.toLowerCase())
       )
 
-      // Parse minimum CGPA criteria
+      // Parse minimum CGPA criteria and backlogs
       let minCgpa = 6.0
-      if (company.remarks && company.remarks.includes('CGPA')) {
-        const matches = company.remarks.match(/CGPA\s*(?:>=|>|of)?\s*([0-9.]+)/i)
-        if (matches && matches[1]) minCgpa = parseFloat(matches[1])
+      const explicitCgpaStr = company.minCgpa || matchingForm?.companyMinCgpa || ''
+      if (explicitCgpaStr && !Number.isNaN(parseFloat(explicitCgpaStr)) && parseFloat(explicitCgpaStr) > 0) {
+        minCgpa = parseFloat(explicitCgpaStr)
+      } else {
+        const combinedRemarks = `${company.remarks || ''} ${matchingForm?.companyRemarks || ''}`
+        const cgpaMatch = combinedRemarks.match(/cgpa(?:[\s:>=-]|of|min|minimum|req|required|cutoff|at least|or above|for|to|apply|is)*([0-9.]+)/i)
+        if (cgpaMatch && cgpaMatch[1] && !Number.isNaN(parseFloat(cgpaMatch[1])) && parseFloat(cgpaMatch[1]) > 0) {
+          minCgpa = parseFloat(cgpaMatch[1])
+        }
+      }
+
+      let maxBacklogsAllowed = -1
+      const explicitBacklogsStr = company.maxBacklogs || matchingForm?.companyMaxBacklogs || ''
+      if (explicitBacklogsStr && explicitBacklogsStr !== 'No Limit' && !Number.isNaN(parseInt(explicitBacklogsStr))) {
+        maxBacklogsAllowed = parseInt(explicitBacklogsStr)
+      } else if (explicitBacklogsStr === 'No Limit') {
+        maxBacklogsAllowed = -1
+      } else {
+        const combinedRemarks = `${company.remarks || ''} ${matchingForm?.companyRemarks || ''}`
+        if (combinedRemarks.toLowerCase().includes('backlog')) {
+          const matches = combinedRemarks.match(/(?:max|maximum|at most|upto|up to|no more than|allow|allowed|req|required|min|minimum)?[\s:=]*(\d+)[\s:=]*(?:active\s*)?backlog/i)
+          if (matches && matches[1]) {
+            maxBacklogsAllowed = parseInt(matches[1])
+          } else if (combinedRemarks.toLowerCase().includes('no backlogs') || combinedRemarks.toLowerCase().includes('0 backlog') || combinedRemarks.toLowerCase().includes('zero backlog')) {
+            maxBacklogsAllowed = 0
+          } else {
+            const postMatches = combinedRemarks.match(/backlog[s]?(?:[\s:<=>-]|of|max|maximum|at most|allow|allowed|req|required|min|minimum|to|apply|is)*(\d+)/i)
+            if (postMatches && postMatches[1]) {
+              maxBacklogsAllowed = parseInt(postMatches[1])
+            }
+          }
+        }
       }
 
       // Count eligible students in coordinator's branch
-      const eligibleStudents = deptStudents.filter(
-        (s) => (parseFloat(s.btechCgpa) || 0) >= minCgpa
-      )
+      const eligibleStudents = deptStudents.filter((s) => {
+        const cgpaPass = minCgpa <= 0 || (parseFloat(s.btechCgpa) || 0) >= minCgpa
+        const backlogsPass = maxBacklogsAllowed === -1 || (parseInt(s.noOfBacklogs || (s.activeBacklogs === 'Yes' ? '1' : '0')) || 0) <= maxBacklogsAllowed
+        return cgpaPass && backlogsPass
+      })
 
       // Count applied students in coordinator's branch
       const formId = matchingForm?.id || ''
@@ -98,7 +131,17 @@ export function CoordinatorEligibilityPage() {
           <input
             placeholder="Search drives by company name, sector, or location..."
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => {
+              const val = event.target.value
+              setSearchParams((prev) => {
+                if (val) {
+                  prev.set('q', val)
+                } else {
+                  prev.delete('q')
+                }
+                return prev
+              })
+            }}
             className="h-10 w-full rounded-lg border border-input bg-background pl-9 pr-3 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring"
           />
         </div>

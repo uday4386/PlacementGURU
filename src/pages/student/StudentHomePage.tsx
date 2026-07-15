@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom'
 import { Sparkles, GraduationCap, ArrowRight, Eye, BookOpen, Award } from 'lucide-react'
 import {
   studentDrives,
-  studentNotifications,
   studentProfile,
 } from '../../data/platformData'
 import { loadPlacements, loadMasterRows, loadPlacementNotifications, useStoreState } from '../../lib/placeproStore'
@@ -55,24 +54,26 @@ export function StudentHomePage() {
   const allNotifications = useStoreState(loadPlacementNotifications) ?? []
   const placementNotifs = useMemo(() => {
     try {
-      return allNotifications.filter((n) => n.rollNumber === currentRollNumber)
+      const cleanRoll = currentRollNumber.trim().toUpperCase()
+      return allNotifications.filter((n) => {
+        const targetRoll = (n.rollNumber || '').trim().toUpperCase()
+        return !targetRoll || targetRoll === 'ALL' || targetRoll === cleanRoll
+      })
     } catch {
       return []
     }
   }, [allNotifications, currentRollNumber])
 
   const mergedNotifications = useMemo(() => {
-    const mappedPlacement = placementNotifs.map((n) => ({
-      id: n.id,
-      title: `🎉 Selected at ${n.company}`,
-      time: 'New',
-    }))
-    const mappedStatic = studentNotifications.map((n) => ({
-      id: String(n.id),
-      title: n.title,
-      time: n.time,
-    }))
-    return [...mappedPlacement, ...mappedStatic]
+    return placementNotifs.map((n) => {
+      const typeStr = n.type || ''
+      const isCustomBroadcast = ['info', 'warning', 'success', 'announcement', 'Broadcast'].includes(typeStr) || !typeStr
+      return {
+        id: n.id,
+        title: isCustomBroadcast ? (n.company || 'Announcement') : `🎉 Selected at ${n.company || 'Company'}`,
+        time: 'New',
+      }
+    })
   }, [placementNotifs])
 
   return (
@@ -234,7 +235,7 @@ export function StudentHomePage() {
               <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1.5 flex items-center gap-1.5">
                 <Award className="h-3.5 w-3.5 text-amber-500" /> Latest Certifications
               </div>
-              <h5 className="text-sm font-bold text-foreground">Verified by PlacePro AI</h5>
+              <h5 className="text-sm font-bold text-foreground">Verified by PlaceGO! AI</h5>
               <p className="text-xs text-muted-foreground mt-1 leading-relaxed">Complete roadmap nodes to unlock skill certificates on your dashboard.</p>
             </div>
           </div>

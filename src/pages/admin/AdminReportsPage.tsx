@@ -1,577 +1,403 @@
 import { useState, useMemo } from 'react'
-import { Download, FileText, Printer, Search, Eye, X, Bot, Sparkles } from 'lucide-react'
 import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Legend,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
+  Download,
+  FileBarChart,
+  FileSpreadsheet,
+  FileText,
+  Filter,
+  Users,
+  Building2,
+  Briefcase,
+} from 'lucide-react'
 import * as XLSX from 'xlsx'
 import {
   loadMasterRows,
   loadCompanies,
   loadPlacements,
-  type MasterStudentRow,
+  useStoreState,
 } from '../../lib/placeproStore'
-import { getBranchAbbreviation } from '../../lib/utils'
+import { useAcademicYear, getAcademicYearFromYop, normalizeAcademicYear, getAcademicYearFromDate } from '../../lib/AcademicYearContext'
 
-function masterName(row: MasterStudentRow) {
-  return row.fullName || [row.firstName, row.lastName].filter(Boolean).join(' ').trim()
-}
+type ReportType = 'students' | 'companies' | 'placements' | 'summary'
+type ExportFormat = 'excel' | 'csv' | 'pdf'
 
-function masterBacklogs(row: MasterStudentRow) {
-  return (row.noOfBacklogs || row.activeBacklogs || '0').trim()
+function extractPackageLpa(packageLabel: string) {
+  const match = String(packageLabel || '').match(/\d+(?:\.\d+)?/)
+  return match ? parseFloat(match[0]) : Number.NaN
 }
 
 export function AdminReportsPage() {
-  const masterRows = useMemo(() => loadMasterRows() ?? [], [])
-  const companiesList = useMemo(() => loadCompanies() ?? [], [])
-  const placementsList = useMemo(() => loadPlacements() ?? [], [])
+  const { academicYears, selectedYear } = useAcademicYear()
 
-  const [search, setSearch] = useState('')
-  const [filterCategory, setFilterCategory] = useState('All')
-  const [toastMessage, setToastMessage] = useState<string | null>(null)
+  const [yearMode, setYearMode] = useState<'single' | 'multiple' | 'all'>('single')
+  const [selectedReportYears, setSelectedReportYears] = useState<string[]>([selectedYear])
+  const [reportType, setReportType] = useState<ReportType>('placements')
+  const [branchFilter, setBranchFilter] = useState<string>('all')
+  const [companyFilter, setCompanyFilter] = useState<string>('all')
 
-  // Report preview dialog state
-  const [previewReport, setPreviewReport] = useState<{ id: string; name: string; category: string; date: string; size: string; content: string } | null>(null)
+  const allStudents = useStoreState(loadMasterRows) ?? []
+  const allCompanies = useStoreState(loadCompanies) ?? []
+  const allPlacements = useStoreState(loadPlacements) ?? []
 
-  // AI report summary state
-  const [aiSummary, setAiSummary] = useState<string | null>(null)
-  const [isAiLoading, setIsAiLoading] = useState(false)
+  const yearOptions = academicYears.map((y) => y.academic_year)
 
-  const categories = ['All', 'Students', 'Companies', 'TPO Dashboard', 'Placements']
+  const effectiveYears = useMemo(() => {
+    if (yearMode === 'all') return yearOptions
+    if (yearMode === 'single') return [selectedYear]
+    return selectedReportYears
+  }, [yearMode, selectedYear, selectedReportYears, yearOptions])
 
-  const avgPackage = useMemo(() => {
-    if (placementsList.length === 0) return '0.0'
-    const sum = placementsList.reduce((acc, p) => {
-      const match = p.package.match(/(\d+(?:\.\d+)?)/)
-      const num = match ? parseFloat(match[1]) : 0
-      return acc + num
-    }, 0)
-    return (sum / placementsList.length).toFixed(1)
-  }, [placementsList])
-
-  const branchPlacement = useMemo(() => {
-    const defaultBranches = ['CSE', 'IT', 'ECE', 'ME', 'EE', 'CE', 'CSE-ML', 'CSE-DS']
-    const masterBranches = masterRows.map(r => getBranchAbbreviation(r.branch))
-    const placementBranches = placementsList.map(p => getBranchAbbreviation(p.branch))
-    const allBranches = Array.from(new Set([...defaultBranches, ...masterBranches, ...placementBranches])).filter(Boolean)
-
-    return allBranches.map((br) => {
-      const total = masterRows.filter(r => getBranchAbbreviation(r.branch) === br).length
-      const placed = placementsList.filter(p => getBranchAbbreviation(p.branch) === br).length
-      return {
-        branch: br,
-        placed,
-        total,
-      }
-    })
-  }, [masterRows, placementsList])
-
-  const packageDistribution = useMemo(() => {
-    let under5 = 0
-    let range5to10 = 0
-    let range10to20 = 0
-    let range20to40 = 0
-    let over40 = 0
-
-    placementsList.forEach((p) => {
-      const match = p.package.match(/(\d+(?:\.\d+)?)/)
-      const pkg = match ? parseFloat(match[1]) : 0
-      if (pkg < 5) under5++
-      else if (pkg >= 5 && pkg < 10) range5to10++
-      else if (pkg >= 10 && pkg < 20) range10to20++
-      else if (pkg >= 20 && pkg < 40) range20to40++
-      else if (pkg >= 40) over40++
-    })
-
-    const total = under5 + range5to10 + range10to20 + range20to40 + over40
-    if (total === 0) {
-      return []
-    }
-
-    return [
-      { name: '< 5 LPA', value: under5, color: 'oklch(70% 0.18 30)' },
-      { name: '5–10 LPA', value: range5to10, color: 'oklch(54.6% 0.215 262.88)' },
-      { name: '10–20 LPA', value: range10to20, color: 'oklch(66% 0.16 152)' },
-      { name: '20–40 LPA', value: range20to40, color: 'oklch(78% 0.15 75)' },
-      { name: '> 40 LPA', value: over40, color: 'oklch(65% 0.2 320)' },
-    ]
-  }, [placementsList])
-
-  const reportsList = useMemo(() => {
-    return [
-      {
-        id: 'REP-01',
-        name: 'Student Master Database Report',
-        category: 'Students',
-        date: new Date().toISOString().split('T')[0],
-        size: `${((JSON.stringify(masterRows).length) / 1024).toFixed(1)} KB`,
-        content: `Total Students registered in Master Database: ${masterRows.length}.\nBranches included: ${Array.from(new Set(masterRows.map(r => r.branch))).join(', ') || 'None'}.`
-      },
-      {
-        id: 'REP-02',
-        name: 'Recruitment Drives Report',
-        category: 'Companies',
-        date: new Date().toISOString().split('T')[0],
-        size: `${((JSON.stringify(companiesList).length) / 1024).toFixed(1)} KB`,
-        content: `Total Recruitment Drives registered: ${companiesList.length}.\nActive: ${companiesList.filter(c => c.status === 'Active').length}, Completed: ${companiesList.filter(c => c.status === 'Completed').length}, Upcoming: ${companiesList.filter(c => c.status === 'Upcoming').length}.\nSectors: ${Array.from(new Set(companiesList.map(c => c.sector))).join(', ') || 'None'}.`
-      },
-      {
-        id: 'REP-03',
-        name: 'TPO Dashboard Analytical Report',
-        category: 'TPO Dashboard',
-        date: new Date().toISOString().split('T')[0],
-        size: '15.4 KB',
-        content: `Total Drives: ${companiesList.length}.\nTotal Student Selections: ${placementsList.length}.\nAverage Placement Package: ₹ ${avgPackage} LPA.\nIT Companies Count: ${companiesList.filter(c => c.jobType === 'IT').length}, Non-IT Companies: ${companiesList.filter(c => c.jobType !== 'IT').length}.`
-      },
-      {
-        id: 'REP-04',
-        name: 'Placement Offers Repository Report',
-        category: 'Placements',
-        date: new Date().toISOString().split('T')[0],
-        size: `${((JSON.stringify(placementsList).length) / 1024).toFixed(1)} KB`,
-        content: `Total Official Placement Offers: ${placementsList.length}.\nOn-campus offers: ${placementsList.filter(p => p.type === 'On-campus').length}, Off-campus offers: ${placementsList.filter(p => p.type === 'Off-campus').length}.\nCompanies represented: ${Array.from(new Set(placementsList.map(p => p.company))).join(', ') || 'None'}.`
-      }
-    ]
-  }, [masterRows, companiesList, placementsList, avgPackage])
-
-  const filteredReports = useMemo(() => {
-    return reportsList.filter((r) => {
-      const matchesSearch = r.name.toLowerCase().includes(search.toLowerCase())
-      const matchesCategory = filterCategory === 'All' || r.category === filterCategory
-      return matchesSearch && matchesCategory
-    })
-  }, [reportsList, search, filterCategory])
-
-  function showToast(msg: string) {
-    setToastMessage(msg)
-    setTimeout(() => setToastMessage(null), 3000)
+  const toggleReportYear = (year: string) => {
+    setSelectedReportYears((prev) =>
+      prev.includes(year) ? prev.filter((y) => y !== year) : [...prev, year]
+    )
   }
 
-  function handleDownloadExcel(category: string) {
-    let data: any[] = []
-    let sheetName = ''
+  // Filter data by selected years
+  const filteredStudents = useMemo(() => {
+    return allStudents.filter((s) => {
+      const studentYear = s.academicYear || getAcademicYearFromYop(s.btechYop)
+      if (!effectiveYears.includes(studentYear)) return false
+      if (branchFilter !== 'all' && s.branch !== branchFilter) return false
+      return true
+    })
+  }, [allStudents, effectiveYears, branchFilter])
 
-    if (category === 'Students') {
-      data = masterRows.map(r => ({
-        'Roll Number': r.rollNumber,
-        'Name': masterName(r),
-        'Email': r.mailId,
-        'Phone': r.phoneNumber,
-        'Branch': r.branch,
-        'CGPA': r.btechCgpa,
-        '10th %': r.tenthPercentage,
-        '12th %': r.twelfthPercentage,
-        'Active Backlogs': masterBacklogs(r),
-      }))
-      sheetName = 'Students'
-    } else if (category === 'Companies') {
-      data = companiesList.map(c => ({
-        'Company Name': c.name,
-        'Sector': c.sector,
-        'Type': c.type,
-        'Location': c.location,
-        'Package': c.package,
-        'Drive Mode': c.mode,
-        'Job Type': c.jobType,
-        'Status': c.status,
-        'Academic Year': c.academicYear,
-      }))
-      sheetName = 'Companies'
-    } else if (category === 'TPO Dashboard') {
-      data = companiesList.map(c => {
-        const hires = placementsList.filter(p => p.company.toLowerCase() === c.name.toLowerCase())
-        const branchCounts: Record<string, number> = {}
-        hires.forEach(h => {
-          branchCounts[h.branch] = (branchCounts[h.branch] || 0) + 1
-        })
-        const deptStr = Object.entries(branchCounts).map(([b, cnt]) => `${b} (${cnt})`).join(' | ')
-        return {
-          'Company Name': c.name,
+  const filteredCompanies = useMemo(() => {
+    return allCompanies.filter((c) => {
+      const companyYear = normalizeAcademicYear(c.academicYear)
+      if (!effectiveYears.includes(companyYear)) return false
+      if (companyFilter !== 'all' && c.name !== companyFilter) return false
+      return true
+    })
+  }, [allCompanies, effectiveYears, companyFilter])
+
+  const filteredPlacements = useMemo(() => {
+    return allPlacements.filter((p) => {
+      const placementYear = p.academicYear || getAcademicYearFromDate(p.date)
+      if (!effectiveYears.includes(placementYear)) return false
+      if (branchFilter !== 'all' && p.branch !== branchFilter) return false
+      if (companyFilter !== 'all' && p.company !== companyFilter) return false
+      return true
+    })
+  }, [allPlacements, effectiveYears, branchFilter, companyFilter])
+
+  // Unique filters
+  const branches = [...new Set(allStudents.map((s) => s.branch).filter(Boolean))].sort()
+  const companyNames = [...new Set(allCompanies.map((c) => c.name).filter(Boolean))].sort()
+
+  // Generate report data
+  const reportData = useMemo(() => {
+    switch (reportType) {
+      case 'students':
+        return filteredStudents.map((s) => ({
+          'Roll Number': s.rollNumber,
+          'Name': s.fullName || `${s.firstName} ${s.lastName}`,
+          'Branch': s.branch,
+          'Email': s.mailId,
+          'Phone': s.phoneNumber,
+          'CGPA': s.btechCgpa,
+          'YOP': s.btechYop,
+          'Academic Year': s.academicYear || getAcademicYearFromYop(s.btechYop),
+        }))
+      case 'companies':
+        return filteredCompanies.map((c) => ({
+          'Company': c.name,
           'Sector': c.sector,
-          'Mode of Drive': c.mode,
-          'Job Type': c.jobType,
-          'Package Offered': c.package,
-          'No. of Selections': hires.length,
-          'Department Hires': deptStr || 'None',
-        }
-      })
-      sheetName = 'TPO_Analytics'
-    } else if (category === 'Placements') {
-      data = placementsList.map(p => ({
-        'Student Name': p.student,
-        'Roll Number': p.id,
-        'Branch': p.branch,
-        'Company': p.company,
-        'Role': p.role,
-        'Package': p.package,
-        'Date': p.date,
-        'Type': p.type,
-      }))
-      sheetName = 'Placements'
-    }
+          'Type': c.type,
+          'Location': c.location,
+          'Package': c.package,
+          'Status': c.status,
+          'Mode': c.mode,
+          'Academic Year': c.academicYear,
+        }))
+      case 'placements':
+        return filteredPlacements.map((p) => ({
+          'Student': p.student,
+          'Roll Number': p.id,
+          'Branch': p.branch,
+          'Company': p.company,
+          'Role': p.role,
+          'Package': p.package,
+          'Date': p.date,
+          'Type': p.type,
+        }))
+      case 'summary':
+        return effectiveYears.map((year) => {
+          const yearStudents = allStudents.filter((s) => (s.academicYear || getAcademicYearFromYop(s.btechYop)) === year)
+          const yearPlacements = allPlacements.filter((p) => (p.academicYear || getAcademicYearFromDate(p.date)) === year)
+          const yearCompanies = allCompanies.filter((c) => normalizeAcademicYear(c.academicYear) === year)
 
-    const worksheet = XLSX.utils.json_to_sheet(data)
-    const workbook = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(workbook, worksheet, sheetName)
-    XLSX.writeFile(workbook, `${sheetName.toLowerCase()}_report.xlsx`)
-    showToast(`${category} Excel report downloaded successfully!`)
-  }
+          let highest = 0, sum = 0, count = 0
+          yearPlacements.forEach((p) => {
+            const lpa = extractPackageLpa(p.package)
+            if (!isNaN(lpa)) { if (lpa > highest) highest = lpa; sum += lpa; count++ }
+          })
 
-  function handleDownloadPdf(category: string) {
-    const printWindow = window.open('', '_blank')
-    if (!printWindow) return
-
-    let title = ''
-    let tableHeaders = ''
-    let tableRows = ''
-
-    if (category === 'Students') {
-      title = 'Student Master Database Report'
-      tableHeaders = '<tr><th>Roll Number</th><th>Name</th><th>Branch</th><th>CGPA</th><th>10th %</th><th>12th %</th><th>Backlogs</th></tr>'
-      tableRows = masterRows.map(r => `
-        <tr>
-          <td>${r.rollNumber}</td>
-          <td>${masterName(r)}</td>
-          <td>${r.branch}</td>
-          <td>${r.btechCgpa}</td>
-          <td>${r.tenthPercentage}</td>
-          <td>${r.twelfthPercentage}</td>
-          <td>${masterBacklogs(r)}</td>
-        </tr>
-      `).join('')
-    } else if (category === 'Companies') {
-      title = 'Recruitment Drives Report'
-      tableHeaders = '<tr><th>Company</th><th>Sector</th><th>Type</th><th>Location</th><th>Package</th><th>Mode</th><th>Job Type</th><th>Status</th></tr>'
-      tableRows = companiesList.map(c => `
-        <tr>
-          <td>${c.name}</td>
-          <td>${c.sector}</td>
-          <td>${c.type}</td>
-          <td>${c.location}</td>
-          <td>${c.package}</td>
-          <td>${c.mode}</td>
-          <td>${c.jobType}</td>
-          <td>${c.status}</td>
-        </tr>
-      `).join('')
-    } else if (category === 'TPO Dashboard') {
-      title = 'TPO Dashboard Report'
-      tableHeaders = '<tr><th>Company</th><th>Mode</th><th>Job Type</th><th>Selections</th><th>Dept Hires</th><th>Package</th></tr>'
-      tableRows = companiesList.map(c => {
-        const hires = placementsList.filter(p => p.company.toLowerCase() === c.name.toLowerCase())
-        const branchCounts: Record<string, number> = {}
-        hires.forEach(h => {
-          branchCounts[h.branch] = (branchCounts[h.branch] || 0) + 1
+          return {
+            'Academic Year': year,
+            'Total Students': yearStudents.length,
+            'Total Placed': yearPlacements.length,
+            'Placement %': yearStudents.length > 0 ? `${Math.round((yearPlacements.length / yearStudents.length) * 100)}%` : '0%',
+            'Companies': yearCompanies.length,
+            'Highest Package (LPA)': highest || 'N/A',
+            'Avg Package (LPA)': count > 0 ? (sum / count).toFixed(1) : 'N/A',
+          }
         })
-        const deptStr = Object.entries(branchCounts).map(([b, cnt]) => `${b} (${cnt})`).join(' | ')
-        return `
-          <tr>
-            <td>${c.name}</td>
-            <td>${c.mode}</td>
-            <td>${c.jobType}</td>
-            <td>${hires.length}</td>
-            <td>${deptStr || 'None'}</td>
-            <td>${c.package}</td>
-          </tr>
-        `
-      }).join('')
-    } else if (category === 'Placements') {
-      title = 'Placements Placement Offers Report'
-      tableHeaders = '<tr><th>Student</th><th>Roll Number</th><th>Branch</th><th>Company</th><th>Role</th><th>Package</th><th>Date</th></tr>'
-      tableRows = placementsList.map(p => `
-        <tr>
-          <td>${p.student}</td>
-          <td>${p.id}</td>
-          <td>${p.branch}</td>
-          <td>${p.company}</td>
-          <td>${p.role}</td>
-          <td>${p.package}</td>
-          <td>${p.date}</td>
-        </tr>
-      `).join('')
+      default:
+        return []
     }
+  }, [reportType, filteredStudents, filteredCompanies, filteredPlacements, effectiveYears, allStudents, allPlacements, allCompanies])
 
-    printWindow.document.write(`
-      <html>
-        <head>
-          <title>${title}</title>
-          <style>
-            body { font-family: sans-serif; padding: 20px; color: #333; }
-            h1 { text-align: center; color: #1e3a8a; }
-            table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 12px; }
-            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-            th { background-color: #f3f4f6; font-weight: bold; }
-            tr:nth-child(even) { background-color: #f9fafb; }
-            .footer { margin-top: 30px; text-align: center; font-size: 10px; color: #777; }
-          </style>
-        </head>
-        <body>
-          <h1>PlacePro - ${title}</h1>
-          <p>Generated on: ${new Date().toLocaleDateString()} at ${new Date().toLocaleTimeString()}</p>
-          <table>
-            <thead>${tableHeaders}</thead>
-            <tbody>${tableRows}</tbody>
-          </table>
-          <div class="footer">PlacePro Placement Portal &copy; 2026 - Official Report</div>
-          <script>
-            window.onload = function() {
-              window.print();
-              window.close();
-            }
-          </script>
-        </body>
-      </html>
-    `)
-    printWindow.document.close()
-    showToast(`${category} PDF report loaded in print view.`)
+  // Export functions
+  const exportExcel = () => {
+    const ws = XLSX.utils.json_to_sheet(reportData)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, reportType)
+    XLSX.writeFile(wb, `PlaceGO!-${reportType}-${effectiveYears.join('_')}.xlsx`)
   }
 
-  function handleGenerateAiSummary() {
-    setIsAiLoading(true)
-    setTimeout(() => {
-      setAiSummary(
-        '🤖 AI Report Generator Summary:\n\n' +
-        `This year ${placementsList.length} students were placed. ` +
-        `We have verified ${masterRows.length} registered students in the master database. ` +
-        `Recruiters have conducted a total of ${companiesList.length} recruitment drives.\n\n` +
-        `Average placement package for the season stands at ₹ ${avgPackage} LPA. ` +
-        `IT companies constitute ${companiesList.filter(c => c.jobType === 'IT').length} of the total drive list.`
-      )
-      setIsAiLoading(false)
-      showToast('AI Summary generated successfully!')
-    }, 1000)
+  const exportCSV = () => {
+    if (reportData.length === 0) return
+    const headers = Object.keys(reportData[0])
+    const csvContent = [
+      headers.join(','),
+      ...reportData.map((row: any) => headers.map((h) => `"${String(row[h] || '').replace(/"/g, '""')}"`).join(',')),
+    ].join('\n')
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `PlaceGO!-${reportType}-${effectiveYears.join('_')}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const exportPDF = () => {
+    if (reportData.length === 0) return
+    const headers = Object.keys(reportData[0])
+    const title = `PlaceGO! - ${reportType.charAt(0).toUpperCase() + reportType.slice(1)} Report`
+    const subtitle = `Academic Year(s): ${effectiveYears.join(', ')} | Generated: ${new Date().toLocaleDateString()}`
+
+    // Build a printable HTML table
+    let html = `<!DOCTYPE html><html><head><title>${title}</title>
+      <style>
+        body { font-family: 'Inter', Arial, sans-serif; padding: 30px; color: #1a1a2e; }
+        h1 { font-size: 20px; margin-bottom: 4px; }
+        .sub { font-size: 12px; color: #666; margin-bottom: 20px; }
+        table { width: 100%; border-collapse: collapse; font-size: 11px; }
+        th { background: #1a1a2e; color: white; padding: 8px 6px; text-align: left; }
+        td { padding: 6px; border-bottom: 1px solid #e5e7eb; }
+        tr:nth-child(even) { background: #f9fafb; }
+        @media print { body { padding: 10px; } }
+      </style></head><body>
+      <h1>${title}</h1>
+      <div class="sub">${subtitle}</div>
+      <table><thead><tr>${headers.map((h) => `<th>${h}</th>`).join('')}</tr></thead><tbody>`
+
+    reportData.forEach((row: any) => {
+      html += `<tr>${headers.map((h) => `<td>${row[h] ?? ''}</td>`).join('')}</tr>`
+    })
+
+    html += '</tbody></table></body></html>'
+
+    const printWindow = window.open('', '_blank')
+    if (printWindow) {
+      printWindow.document.write(html)
+      printWindow.document.close()
+      printWindow.focus()
+      setTimeout(() => printWindow.print(), 500)
+    }
+  }
+
+  const handleExport = (format: ExportFormat) => {
+    if (format === 'excel') exportExcel()
+    else if (format === 'csv') exportCSV()
+    else exportPDF()
+  }
+
+  const reportTypeConfig = {
+    students: { icon: <Users className="h-4 w-4" />, label: 'Students Report', color: 'bg-blue-100 text-blue-700' },
+    companies: { icon: <Building2 className="h-4 w-4" />, label: 'Companies Report', color: 'bg-purple-100 text-purple-700' },
+    placements: { icon: <Briefcase className="h-4 w-4" />, label: 'Placements Report', color: 'bg-emerald-100 text-emerald-700' },
+    summary: { icon: <FileBarChart className="h-4 w-4" />, label: 'Summary Report', color: 'bg-amber-100 text-amber-700' },
   }
 
   return (
     <>
-      {toastMessage && (
-        <div className="fixed top-4 right-4 z-50 rounded-lg bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground shadow-pop animate-in fade-in duration-300">
-          {toastMessage}
-        </div>
-      )}
-
       <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Reports</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Generate analytical logs, search specific records repository files, preview PDF/Excel files, and run the AI summary engine.
+            Generate and export placement reports across academic years
           </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => showToast('Printing current reports list view…')}
-            className="inline-flex h-10 items-center gap-2 rounded-lg border border-input px-4 text-sm font-semibold hover:bg-muted cursor-pointer"
-          >
-            <Printer className="h-4 w-4" /> Print view
-          </button>
         </div>
       </div>
 
-      {/* AI Assistant Summary Box */}
-      <div className="card-surface p-5 md:p-6 mb-6 space-y-4 border border-primary/20 bg-primary/5">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Bot className="h-5 w-5 text-primary shrink-0 animate-bounce" />
-            <div>
-              <h2 className="text-sm font-bold text-foreground uppercase tracking-wider">AI Report Generator</h2>
-              <p className="text-xs text-muted-foreground mt-0.5">Let AI parse report records and summarize seasonal placements.</p>
-            </div>
+      {/* Controls */}
+      <div className="card-surface p-5 mb-6">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          {/* Year Mode */}
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Year Scope</label>
+            <select
+              value={yearMode}
+              onChange={(e) => setYearMode(e.target.value as any)}
+              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring"
+            >
+              <option value="single">Selected Year ({selectedYear})</option>
+              <option value="multiple">Multiple Years</option>
+              <option value="all">All Years</option>
+            </select>
           </div>
-          <button
-            type="button"
-            onClick={handleGenerateAiSummary}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground shadow-pop hover:opacity-95 cursor-pointer shrink-0 transition"
-          >
-            <Sparkles className="h-3.5 w-3.5 animate-spin" /> {isAiLoading ? 'Analyzing…' : 'Generate Placement Summary'}
-          </button>
+
+          {/* Report Type */}
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Report Type</label>
+            <select
+              value={reportType}
+              onChange={(e) => setReportType(e.target.value as ReportType)}
+              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring"
+            >
+              <option value="placements">📋 Placements</option>
+              <option value="students">👥 Students</option>
+              <option value="companies">🏢 Companies</option>
+              <option value="summary">📊 Year Summary</option>
+            </select>
+          </div>
+
+          {/* Branch Filter */}
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Branch</label>
+            <select
+              value={branchFilter}
+              onChange={(e) => setBranchFilter(e.target.value)}
+              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring"
+            >
+              <option value="all">All Branches</option>
+              {branches.map((b) => <option key={b} value={b}>{b}</option>)}
+            </select>
+          </div>
+
+          {/* Company Filter */}
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Company</label>
+            <select
+              value={companyFilter}
+              onChange={(e) => setCompanyFilter(e.target.value)}
+              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring"
+            >
+              <option value="all">All Companies</option>
+              {companyNames.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
         </div>
 
-        {aiSummary && (
-          <div className="p-4 bg-background border border-primary/10 rounded-lg text-xs leading-relaxed text-muted-foreground animate-in fade-in duration-300">
-            {aiSummary.split('\n').map((line, idx) => (
-              <div key={idx} className="mt-1">{line}</div>
-            ))}
+        {/* Multiple year selection */}
+        {yearMode === 'multiple' && (
+          <div className="mt-4 pt-4 border-t border-border">
+            <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Select Years</div>
+            <div className="flex flex-wrap gap-2">
+              {yearOptions.map((y) => (
+                <button
+                  key={y}
+                  onClick={() => toggleReportYear(y)}
+                  className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
+                    selectedReportYears.includes(y)
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                  }`}
+                >
+                  {y}
+                </button>
+              ))}
+            </div>
           </div>
         )}
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-2 mb-6">
-        <div className="card-surface p-5 md:p-6">
-          <h3 className="mb-4 font-semibold text-foreground">Branch-wise Placement Rate</h3>
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={branchPlacement}>
-                <CartesianGrid strokeDasharray="3 3" stroke="oklch(92.8% 0.012 255)" />
-                <XAxis dataKey="branch" tick={{ fontSize: 12 }} />
-                <YAxis tick={{ fontSize: 12 }} />
-                <Tooltip />
-                <Legend />
-                <Bar dataKey="placed" name="Placed" fill="oklch(54.6% 0.215 262.88)" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="total" name="Total" fill="oklch(92.8% 0.012 255)" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+      {/* Report Summary + Export */}
+      <div className="card-surface p-5 mb-6">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-3">
+            <div className={`rounded-lg p-2 ${reportTypeConfig[reportType].color}`}>
+              {reportTypeConfig[reportType].icon}
+            </div>
+            <div>
+              <div className="font-semibold">{reportTypeConfig[reportType].label}</div>
+              <div className="text-xs text-muted-foreground">
+                {reportData.length} records · Years: {effectiveYears.join(', ')}
+              </div>
+            </div>
           </div>
-        </div>
 
-        <div className="card-surface p-5 md:p-6">
-          <h3 className="mb-4 font-semibold text-foreground">Package Distribution</h3>
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie data={packageDistribution} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={50} outerRadius={80}>
-                  {packageDistribution.map((entry) => (
-                    <Cell key={entry.name} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleExport('excel')}
+              disabled={reportData.length === 0}
+              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 transition disabled:opacity-40"
+            >
+              <FileSpreadsheet className="h-4 w-4" /> Excel
+            </button>
+            <button
+              onClick={() => handleExport('csv')}
+              disabled={reportData.length === 0}
+              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition disabled:opacity-40"
+            >
+              <FileText className="h-4 w-4" /> CSV
+            </button>
+            <button
+              onClick={() => handleExport('pdf')}
+              disabled={reportData.length === 0}
+              className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 transition disabled:opacity-40"
+            >
+              <Download className="h-4 w-4" /> PDF
+            </button>
           </div>
         </div>
       </div>
 
-      {/* Reports Search, Category Filters, and Table */}
-      <div className="space-y-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-wrap gap-2">
-            {['All', ...categories.slice(1)].map((c) => (
-              <button
-                key={c}
-                type="button"
-                onClick={() => setFilterCategory(c)}
-                className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
-                  filterCategory === c
-                    ? 'border-primary bg-primary text-primary-foreground'
-                    : 'border-input hover:bg-muted'
-                }`}
-              >
-                {c === 'All' ? 'All categories' : c}
-              </button>
-            ))}
-          </div>
-
-          <div className="relative max-w-sm w-full">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <input
-              placeholder="Search reports by name…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="h-10 w-full rounded-lg border border-input bg-background pl-9 pr-3 text-xs outline-none transition focus:border-ring focus:ring-2 focus:ring-ring"
-            />
-          </div>
-        </div>
-
-        <div className="card-surface overflow-hidden">
-          <div className="border-b border-border px-5 py-4 md:px-6">
-            <h3 className="font-semibold">Reports Repository</h3>
-          </div>
-          <div className="overflow-x-auto">
+      {/* Data Preview Table */}
+      <div className="card-surface overflow-hidden">
+        <div className="overflow-x-auto">
+          {reportData.length === 0 ? (
+            <div className="flex h-48 items-center justify-center text-sm text-muted-foreground">
+              <div className="text-center">
+                <Filter className="mx-auto h-10 w-10 text-muted-foreground/30 mb-2" />
+                <p>No records found for the selected filters</p>
+              </div>
+            </div>
+          ) : (
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-border text-left text-muted-foreground">
-                  <th className="px-5 py-3 font-medium">Report</th>
-                  <th className="px-5 py-3 font-medium">Category</th>
-                  <th className="px-5 py-3 font-medium">Generated</th>
-                  <th className="px-5 py-3 font-medium">Size</th>
-                  <th className="px-5 py-3 font-medium text-right">Action</th>
+                <tr className="border-b border-border bg-muted/40">
+                  {Object.keys(reportData[0]).map((header) => (
+                    <th key={header} className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground whitespace-nowrap">
+                      {header}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
-                {filteredReports.map((r) => (
-                  <tr key={r.id} className="border-b border-border last:border-0 hover:bg-muted/40 transition-colors">
-                    <td className="px-5 py-3 font-bold">{r.name}</td>
-                    <td className="px-5 py-3 text-xs text-muted-foreground">{r.category}</td>
-                    <td className="px-5 py-3 text-muted-foreground">{r.date}</td>
-                    <td className="px-5 py-3 text-muted-foreground">{r.size}</td>
-                    <td className="px-5 py-3 text-right space-x-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setPreviewReport(r)}
-                        className="inline-flex h-8 px-2.5 items-center gap-1 rounded bg-muted hover:bg-muted/80 text-xs font-semibold text-foreground cursor-pointer"
-                      >
-                        <Eye className="h-3.5 w-3.5" /> Preview
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDownloadExcel(r.category)}
-                        className="inline-flex h-8 px-2.5 items-center gap-1 rounded bg-success/15 hover:bg-success/20 text-xs font-semibold text-success cursor-pointer"
-                      >
-                        <Download className="h-3.5 w-3.5" /> Excel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDownloadPdf(r.category)}
-                        className="inline-flex h-8 px-2.5 items-center gap-1 rounded bg-primary/15 hover:bg-primary/20 text-xs font-semibold text-primary cursor-pointer"
-                      >
-                        <Download className="h-3.5 w-3.5" /> PDF
-                      </button>
-                    </td>
+                {reportData.slice(0, 50).map((row: any, i: number) => (
+                  <tr key={i} className="border-b border-border hover:bg-muted/20 transition">
+                    {Object.values(row).map((val: any, j: number) => (
+                      <td key={j} className="px-4 py-2.5 whitespace-nowrap">
+                        {val ?? '-'}
+                      </td>
+                    ))}
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
+          )}
+          {reportData.length > 50 && (
+            <div className="p-3 text-center text-xs text-muted-foreground border-t border-border">
+              Showing first 50 of {reportData.length} records. Export to see all.
+            </div>
+          )}
         </div>
       </div>
-
-      {/* PDF/Excel Report Previewer Modal */}
-      {previewReport && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="w-full max-w-lg card-surface p-6 shadow-pop animate-in zoom-in-95 duration-200 relative">
-            <button
-              type="button"
-              onClick={() => setPreviewReport(null)}
-              className="absolute right-4 top-4 text-muted-foreground hover:text-foreground"
-            >
-              <X className="h-5 w-5" />
-            </button>
-
-            <div className="flex items-center gap-3 border-b border-border pb-4 mb-4">
-              <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary/10">
-                <FileText className="h-5 w-5 text-primary" />
-              </div>
-              <div>
-                <h2 className="text-base font-bold text-foreground">{previewReport.name}</h2>
-                <p className="text-xs text-muted-foreground">Category: {previewReport.category} · Size: {previewReport.size}</p>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <div className="flex justify-between text-xs text-muted-foreground">
-                <span>File Format: <strong>PDF/Excel Preview</strong></span>
-                <span>Generated: <strong>{previewReport.date}</strong></span>
-              </div>
-              <div>
-                <span className="text-xs font-semibold text-muted-foreground uppercase block mb-1">Document Preview Contents</span>
-                <div className="p-4 bg-muted/30 border border-border rounded-lg text-xs leading-relaxed text-muted-foreground font-mono whitespace-pre-line">
-                  {previewReport.content}
-                </div>
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 border-t border-border pt-4 mt-6">
-              <button
-                type="button"
-                onClick={() => setPreviewReport(null)}
-                className="h-10 px-4 rounded-lg border border-input text-sm font-semibold hover:bg-muted"
-              >
-                Close Preview
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   )
 }

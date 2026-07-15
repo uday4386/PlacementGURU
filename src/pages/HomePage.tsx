@@ -2,7 +2,6 @@ import { Link } from 'react-router-dom'
 import {
   ArrowRight,
   CircleCheck,
-  GraduationCap,
   Users,
   Compass,
   FileSpreadsheet,
@@ -79,10 +78,12 @@ export function HomePage() {
       <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/80 backdrop-blur-md">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 md:px-8">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm shadow-blue-500/30">
-              <GraduationCap className="h-5 w-5" />
-            </div>
-            <span className="text-xl font-bold tracking-tight text-slate-900">CampusConnect</span>
+            <img
+              src="/placego-logo.png"
+              alt="PlaceGO!"
+              className="h-9 w-9 rounded-xl object-contain shadow-sm shadow-blue-500/30"
+            />
+            <span className="text-xl font-bold tracking-tight text-slate-900">PlaceGO!</span>
           </div>
 
           <div className="flex items-center gap-4">
@@ -344,7 +345,7 @@ export function HomePage() {
               <div className="w-full md:w-80 rounded-xl bg-white/10 backdrop-blur-md border border-white/15 p-4 text-xs space-y-3 shrink-0">
                 <div className="flex items-center gap-1.5 border-b border-white/10 pb-2">
                   <div className="h-2 w-2 rounded-full bg-emerald-400" />
-                  <span className="font-bold">CampusConnect AI Assistant</span>
+                  <span className="font-bold">PlaceGO! AI Assistant</span>
                 </div>
                 <div className="rounded bg-white/5 p-2 font-mono leading-relaxed text-white/90">
                   <span className="text-blue-200">User:</span> How do I prepare for a software engineering mock interview?
@@ -360,7 +361,7 @@ export function HomePage() {
 
       {/* FOOTER */}
       <footer className="border-t border-slate-200 bg-white py-12 text-center text-xs text-slate-500">
-        © 2026 CampusConnect · Built for college & university placement cells
+        © 2026 PlaceGO! · Built for college & university placement cells
       </footer>
     </div>
   )

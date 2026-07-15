@@ -131,6 +131,9 @@ export function getShortBranchName(branch: string): string {
  * Check whether a student's branch matches a coordinator's assigned department.
  */
 export function matchesBranch(studentBranch: string, coordBranch: string): boolean {
+  if (!coordBranch || coordBranch.trim().toUpperCase() === 'ALL' || coordBranch.trim().toUpperCase() === 'ALL BRANCHES' || coordBranch.trim().toUpperCase() === 'ALL DEPARTMENTS') {
+    return true
+  }
   const sb = getShortBranchName(studentBranch)
   const cb = getShortBranchName(coordBranch)
   return sb === cb

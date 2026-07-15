@@ -19,11 +19,14 @@ import {
   saveMasterRows,
   loadMasterHistory,
   saveMasterHistory,
+  loadPlacements,
+  refreshStore,
   type MasterStudentRow,
   type UploadHistoryEntry,
   useStoreState,
 } from '../../lib/placeproStore'
 import { getShortBranchName, getAllShortBranches } from '../../lib/branchUtils'
+import { getAcademicYearFromYop } from '../../lib/AcademicYearContext'
 
 interface StudentRecord {
   id: string
@@ -149,6 +152,75 @@ function parseWorkbookRows(fileData: ArrayBuffer) {
         return formatCellValue(index === undefined ? '' : row[index])
       }
 
+      const getValWithAliases = (header: string, aliases: string[] = []) => {
+        const allKeys = [header, ...aliases].map(k => k.toUpperCase())
+        for (const k of allKeys) {
+          const idx = headerIndex.get(k)
+          if (idx !== undefined) {
+            const val = formatCellValue(row[idx])
+            if (val) return val
+          }
+        }
+        // Smart fuzzy search across uploaded headers if exact match not found
+        const isYopHeader = header.includes('YOP') || header.includes('YEAR')
+        const isBoardHeader = header.includes('BOARD')
+        for (const [k, idx] of headerIndex.entries()) {
+          const upper = k.toUpperCase()
+          // Prevent YOP / Board headers from fuzzy-matching percentage/marks columns and vice versa
+          if (isYopHeader && !upper.includes('YOP') && !upper.includes('YEAR') && !upper.includes('BATCH')) continue
+          if (!isYopHeader && (upper.includes('YOP') || upper.includes('YEAR') || upper.includes('PASSING'))) continue
+          if (isBoardHeader && !upper.includes('BOARD') && !upper.includes('SCHOOL')) continue
+
+          for (const target of allKeys) {
+            if (upper.includes(target) || (header.includes('10TH') && (upper.includes('10TH') || upper.includes('TENTH') || upper.includes('SSC'))) || (header.includes('12TH') && (upper.includes('12TH') || upper.includes('TWELFTH') || upper.includes('INTER')))) {
+              const val = formatCellValue(row[idx])
+              if (val) return val
+            }
+          }
+        }
+        return ''
+      }
+
+      let tenthYop = getValWithAliases('10TH YOP', [
+        '10TH PASSING YEAR', 'SSC YOP', 'TENTH YOP', '10TH YEAR OF PASSING', 'SSC YEAR OF PASSING',
+        '10TH YEAR', '10 YEAR', 'SSC YEAR', '10TH PASS YEAR', 'YEAR OF PASSING (10TH)', 'YOP (10TH)', 'X YOP', 'TENTH YEAR', '10TH BATCH'
+      ])
+      let twelfthYop = getValWithAliases('12TH YOP', [
+        '12TH PASSING YEAR', 'INTER YOP', 'TWELFTH YOP', '12TH YEAR OF PASSING', 'INTER YEAR OF PASSING',
+        '12TH YEAR', '12 YEAR', 'INTER YEAR', '12TH PASS YEAR', 'YEAR OF PASSING (12TH)', 'YOP (12TH)', 'XII YOP', 'TWELFTH YEAR', 'INTERMEDIATE YEAR', '12TH BATCH'
+      ])
+      const btechYop = getValue('B.TECH YOP')
+
+      // If YOP for 10th or 12th remain empty because they are not present in the excel file, check and rectify automatically from B.Tech graduation year / current year
+      if (!tenthYop || !twelfthYop || tenthYop.trim() === '' || twelfthYop.trim() === '' || tenthYop.trim() === '-' || twelfthYop.trim() === '-') {
+        const parsedBtechYear = Number.parseInt(btechYop || String(new Date().getFullYear()), 10)
+        const baseYear = !Number.isNaN(parsedBtechYear) && parsedBtechYear > 2000 ? parsedBtechYear : new Date().getFullYear()
+        if (!twelfthYop || twelfthYop.trim() === '' || twelfthYop.trim() === '-') {
+          twelfthYop = String(baseYear - 4)
+        }
+        if (!tenthYop || tenthYop.trim() === '' || tenthYop.trim() === '-') {
+          const parsed12th = Number.parseInt(twelfthYop, 10)
+          tenthYop = !Number.isNaN(parsed12th) ? String(parsed12th - 2) : String(baseYear - 6)
+        }
+      }
+
+      let collegeName = getValWithAliases('COLLEGE NAME', [
+        'COLLEGE', 'COLLEGE/UNIVERSITY', 'INSTITUTE', 'INSTITUTE NAME', 'INSTITUTION', 'UNIVERSITY', 'CAMPUS', 'SCHOOL', 'COLLEGE / UNIVERSITY', 'NAME OF COLLEGE', 'INSTITUTION NAME', 'COLLEGE_NAME'
+      ])
+      if (!collegeName || collegeName.trim() === '' || collegeName.trim() === '-') {
+        let defaultCollege = 'PlaceGO! College'
+        try {
+          const settingsJson = localStorage.getItem('placepro_settings')
+          if (settingsJson) {
+            const settings = JSON.parse(settingsJson)
+            if (settings && settings.college_name && settings.college_name.trim()) {
+              defaultCollege = settings.college_name.trim()
+            }
+          }
+        } catch (_) {}
+        collegeName = defaultCollege
+      }
+
       return {
         rollNumber: getValue('ROLL NUMBER'),
         firstName: getValue('FIRST NAME'),
@@ -165,17 +237,28 @@ function parseWorkbookRows(fileData: ArrayBuffer) {
         city: getValue('CITY'),
         branch: getValue('BRANCH'),
         dateOfBirth: getValue('DATE OF BIRTH'),
-        tenthPercentage: getValue('10TH'),
-        tenthYop: getValue('10TH YOP'),
-        tenthBoard: getValue('10TH BOARD'),
-        twelfthPercentage: getValue('12TH'),
-        twelfthYop: getValue('12TH YOP'),
-        twelfthBoard: getValue('12TH BOARD'),
-        collegeName: getValue('COLLEGE NAME'),
-        btechCgpa: getValue('B.TECH CGPA'),
-        btechYop: getValue('B.TECH YOP'),
+        tenthPercentage: getValWithAliases('10TH', [
+          '10TH %', '10TH PERCENTAGE', '10 PERCENTAGE', '10TH CLASS', 'SSC PERCENTAGE', 'SSC %',
+          '10TH RESULTS', '10TH RESULT', '10TH RESULTS %', '10TH RESULT %', '10TH RESULTS PERCENTAGE',
+          'TENTH', 'TENTH %', 'TENTH PERCENTAGE', 'TENTH RESULTS', 'TENTH RESULT',
+          'SSC', 'SSC RESULT', 'SSC RESULTS', '10TH MARKS', '10TH GPA', 'CLASS 10', 'CLASS 10 %', 'CLASS 10 PERCENTAGE', 'CLASS X', 'CLASS X %', 'CLASS X PERCENTAGE'
+        ]),
+        tenthYop,
+        tenthBoard: getValWithAliases('10TH BOARD', ['SSC BOARD', 'TENTH BOARD', '10TH SCHOOL BOARD']),
+        twelfthPercentage: getValWithAliases('12TH', [
+          '12TH %', '12TH PERCENTAGE', '12 PERCENTAGE', '12TH CLASS', 'INTER PERCENTAGE', 'INTERMEDIATE PERCENTAGE', 'INTER %', 'INTERMEDIATE %',
+          '12TH RESULTS', '12TH RESULT', '12TH RESULTS %', '12TH RESULT %', '12TH RESULTS PERCENTAGE',
+          'TWELFTH', 'TWELFTH %', 'TWELFTH PERCENTAGE', 'INTER', 'INTER RESULTS', 'INTERMEDIATE', '12TH MARKS', '12TH GPA', 'CLASS 12', 'CLASS 12 %', 'CLASS XII'
+        ]),
+        twelfthYop,
+        twelfthBoard: getValWithAliases('12TH BOARD', ['INTER BOARD', 'TWELFTH BOARD', 'INTERMEDIATE BOARD']),
+        collegeName,
+        btechCgpa: getValWithAliases('B.TECH CGPA', [
+          'CGPA', 'BTECH CGPA', 'B. TECH CGPA', 'B.TECH PERCENTAGE', 'DEGREE CGPA', 'GRADUATION CGPA', 'BTECH PERCENTAGE', 'BTECH RESULTS', 'B.TECH RESULTS', 'OVERALL CGPA', 'B.TECH GPA'
+        ]),
+        btechYop,
         activeBacklogs: getValue('ANY ACTIVE BACKLOGS'),
-        noOfBacklogs: getValue('NO OF BACKLOGS'),
+        noOfBacklogs: getValWithAliases('NO OF BACKLOGS', ['NO. OF BACKLOGS', 'BACKLOGS', 'ACTIVE BACKLOGS']),
       }
     })
 
@@ -233,19 +316,24 @@ export const ELIGIBILITY_COLUMNS = [
 ] as const
 
 export function AdminStudentsPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  const allMasterRows = useStoreState(loadMasterRows) ?? []
+  const allPlacements = useStoreState(loadPlacements) ?? []
+  const [selectedStudent, setSelectedStudent] = useState<MasterStudentRow | null>(null)
   const [activeTab, setActiveTab] = useState<
     'records' | 'upload' | 'history' | 'eligibility'
   >('records')
-  const masterRows = useStoreState(loadMasterRows) ?? []
+  const masterRows = useMemo(
+    () => allMasterRows,
+    [allMasterRows],
+  )
   const historyList = useStoreState(loadMasterHistory) ?? []
-  const [searchParams] = useSearchParams()
-  const searchParam = searchParams.get('search')
+  const searchParam = searchParams.get('q')
   const [search, setSearch] = useState(() => searchParam || '')
 
   useEffect(() => {
-    if (searchParam !== null) {
-      setSearch(searchParam)
-    }
+    setSearch(searchParam || '')
   }, [searchParam])
   const [filterBranch, setFilterBranch] = useState('All')
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
@@ -286,7 +374,7 @@ export function AdminStudentsPage() {
 
 
 
-  const branches = useMemo(
+  const branches = useMemo<string[]>(
     () => ['All', ...new Set(studentsList.map((student) => student.branch))],
     [studentsList],
   )
@@ -306,34 +394,40 @@ export function AdminStudentsPage() {
     const student = masterRows.find((r) => r.rollNumber === rollNumber)
     const displayName = student ? (student.fullName || `${student.firstName} ${student.lastName}`.trim()) : rollNumber
     if (!confirm(`Are you sure you want to delete student "${displayName}" (${rollNumber})?`)) return
-    saveMasterRows(masterRows.filter((r) => r.rollNumber !== rollNumber))
+    saveMasterRows(allMasterRows.filter((r) => r.rollNumber !== rollNumber))
     showToast(`Deleted student ${displayName} (${rollNumber}).`)
   }
-
   const eligibilityRows = useMemo(() => {
     return masterRows.filter((row) => {
-      const tenth = Number.parseFloat(row.tenthPercentage || '0')
-      const twelfth = Number.parseFloat(row.twelfthPercentage || '0')
-      const cgpa = Number.parseFloat(row.btechCgpa || '0')
-      const backlogs = Number.parseInt(row.noOfBacklogs || row.activeBacklogs || '0', 10)
-      const branchMatch =
-        eligibilityBranch === 'All' || row.branch === eligibilityBranch
+      const tenthStr = (row.tenthPercentage || '').trim()
+      const twelfthStr = (row.twelfthPercentage || '').trim()
+      const cgpaStr = (row.btechCgpa || '').trim()
+      const backlogsStr = (row.noOfBacklogs || row.activeBacklogs || '').trim()
 
-      return (
-        branchMatch &&
-        compareNumber(tenth, tenthOperator, Number.parseFloat(tenthValue || '0')) &&
-        compareNumber(
-          twelfth,
-          twelfthOperator,
-          Number.parseFloat(twelfthValue || '0'),
-        ) &&
-        compareNumber(cgpa, cgpaOperator, Number.parseFloat(cgpaValue || '0')) &&
-        compareNumber(
-          Number.isNaN(backlogs) ? 0 : backlogs,
-          backlogOperator,
-          Number.parseFloat(backlogValue || '0'),
-        )
-      )
+      const branchMatch =
+        eligibilityBranch === 'All' || getShortBranchName(row.branch) === eligibilityBranch
+
+      // If a student doesn't have 10th/12th/cgpa info in the uploaded file, we allow it to pass by default
+      const tenthVal = Number.parseFloat(tenthStr)
+      const tenthMatch = !tenthStr || Number.isNaN(tenthVal) || compareNumber(tenthVal, tenthOperator, Number.parseFloat(tenthValue || '0'))
+
+      const twelfthVal = Number.parseFloat(twelfthStr)
+      const twelfthMatch = !twelfthStr || Number.isNaN(twelfthVal) || compareNumber(twelfthVal, twelfthOperator, Number.parseFloat(twelfthValue || '0'))
+
+      const cgpaVal = Number.parseFloat(cgpaStr)
+      const cgpaMatch = !cgpaStr || Number.isNaN(cgpaVal) || compareNumber(cgpaVal, cgpaOperator, Number.parseFloat(cgpaValue || '0'))
+
+      // For backlogs, if it is "No" or empty, treat as 0
+      let backlogs = 0
+      if (backlogsStr && backlogsStr.toLowerCase() !== 'no') {
+        const parsed = Number.parseInt(backlogsStr, 10)
+        if (!Number.isNaN(parsed)) {
+          backlogs = parsed
+        }
+      }
+      const backlogMatch = compareNumber(backlogs, backlogOperator, Number.parseFloat(backlogValue || '0'))
+
+      return branchMatch && tenthMatch && twelfthMatch && cgpaMatch && backlogMatch
     })
   }, [
     backlogOperator,
@@ -347,7 +441,6 @@ export function AdminStudentsPage() {
     twelfthOperator,
     twelfthValue,
   ])
-
   function showToast(message: string) {
     setToastMessage(message)
     setTimeout(() => setToastMessage(null), 3000)
@@ -392,10 +485,25 @@ export function AdminStudentsPage() {
     }
   }
 
-  function confirmUpload() {
+  async function confirmUpload() {
     if (!selectedFile || previewRows.length === 0) return
 
-    saveMasterRows(previewRows)
+    // Merge strategy: Update existing or add new rows based on Roll Number
+    const existingMap = new Map()
+    allMasterRows.forEach(row => {
+      if (row.rollNumber) {
+        existingMap.set(row.rollNumber.trim().toUpperCase(), row)
+      }
+    })
+    previewRows.forEach(row => {
+      if (row.rollNumber) {
+        existingMap.set(row.rollNumber.trim().toUpperCase(), row)
+      }
+    })
+    const mergedRows = Array.from(existingMap.values())
+
+    // Save merged rows to backend and update cache
+    saveMasterRows(mergedRows)
 
     const newLog: UploadHistoryEntry = {
       fileName: selectedFile,
@@ -406,12 +514,18 @@ export function AdminStudentsPage() {
     }
 
     saveMasterHistory([newLog, ...historyList])
+
     setSelectedFile(null)
     setPreviewRows([])
     setShowPreview(false)
     setUploadError(null)
     setActiveTab('records')
     showToast('Master student database updated from the uploaded Excel file.')
+
+    // Re-fetch from server after a short delay to guarantee persistence
+    setTimeout(() => {
+      refreshStore()
+    }, 500)
   }
 
   function downloadHistoryExcel(entry: UploadHistoryEntry) {
@@ -504,14 +618,14 @@ export function AdminStudentsPage() {
       twelfthPercentage: '0',
       twelfthYop: '',
       twelfthBoard: '',
-      collegeName: 'PlacePro College',
+      collegeName: 'PlaceGO! College',
       btechCgpa: Number.parseFloat(newCgpa).toFixed(2),
       btechYop: '2026',
       activeBacklogs: newBacklogs === '0' ? 'No' : 'Yes',
       noOfBacklogs: newBacklogs,
     }
 
-    saveMasterRows([newRow, ...masterRows])
+    saveMasterRows([newRow, ...allMasterRows])
     setIsAddOpen(false)
     setNewRoll('')
     setNewName('')
@@ -591,7 +705,18 @@ export function AdminStudentsPage() {
               <input
                 placeholder="Search by roll number, name, branch, email, or phone..."
                 value={search}
-                onChange={(event) => setSearch(event.target.value)}
+                onChange={(event) => {
+                  const val = event.target.value
+                  setSearch(val)
+                  setSearchParams((prev) => {
+                    if (val) {
+                      prev.set('q', val)
+                    } else {
+                      prev.delete('q')
+                    }
+                    return prev
+                  })
+                }}
                 className="h-10 w-full rounded-lg border border-input bg-background pl-9 pr-3 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring"
               />
             </div>
@@ -644,14 +769,26 @@ export function AdminStudentsPage() {
                       <td className="px-5 py-3">{student.gender}</td>
                       <td className="px-5 py-3">{student.state}</td>
                       <td className="px-5 py-3">
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteStudent(student.id)}
-                          className="inline-flex items-center gap-1 rounded-lg border border-destructive/30 bg-destructive/5 px-2 py-1 text-xs font-semibold text-destructive hover:bg-destructive/10 cursor-pointer transition"
-                          title={`Delete ${student.name}`}
-                        >
-                          <Trash2 className="h-3 w-3" /> Delete
-                        </button>
+                        <div className="flex gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const originalRow = allMasterRows.find(r => r.rollNumber === student.id)
+                              if (originalRow) setSelectedStudent(originalRow)
+                            }}
+                            className="inline-flex items-center gap-1 rounded-lg border border-primary/30 bg-primary/5 px-2 py-1 text-xs font-semibold text-primary hover:bg-primary/10 cursor-pointer transition"
+                          >
+                            View Profile
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteStudent(student.id)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-destructive/30 bg-destructive/5 px-2 py-1 text-xs font-semibold text-destructive hover:bg-destructive/10 cursor-pointer transition"
+                            title={`Delete ${student.name}`}
+                          >
+                            <Trash2 className="h-3 w-3" /> Delete
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -854,6 +991,13 @@ export function AdminStudentsPage() {
                     </td>
                   </tr>
                 ))}
+                {historyList.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-5 py-12 text-center text-muted-foreground italic">
+                      No upload history found. Upload a master student Excel file to see records here.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -1066,6 +1210,14 @@ export function AdminStudentsPage() {
                               </td>
                             )
                           }
+                          if (col.key === 'collegeName') {
+                            const colVal = (!row.collegeName || row.collegeName.trim() === '-' || row.collegeName.trim() === '') ? 'PlaceGO! College' : row.collegeName
+                            return (
+                              <td key={col.key} className="px-5 py-3">
+                                {colVal}
+                              </td>
+                            )
+                          }
                           return (
                             <td key={col.key} className="px-5 py-3">
                               {val || '-'}
@@ -1145,7 +1297,7 @@ export function AdminStudentsPage() {
                   Mail ID
                 </label>
                 <input
-                  type="email"
+                  type="text"
                   placeholder="e.g. priya.s@college.edu"
                   value={newEmail}
                   onChange={(event) => setNewEmail(event.target.value)}
@@ -1251,6 +1403,217 @@ export function AdminStudentsPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* Student Details & History Modal */}
+      {selectedStudent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="card-surface w-full max-w-3xl p-6 mx-4 shadow-xl max-h-[85vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-5 border-b border-border pb-3">
+              <h2 className="text-lg font-bold text-foreground">
+                Student Profile & History
+              </h2>
+              <button onClick={() => setSelectedStudent(null)} className="p-1 hover:bg-muted rounded-md transition-colors">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-6">
+              {/* Profile Details */}
+              <div className="space-y-6">
+                {/* Section 1: Personal Details */}
+                <div>
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-primary mb-2.5">Personal Details</h4>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm bg-muted/10 p-3.5 rounded-xl border border-border">
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">Full Name</span>
+                      <span className="font-semibold text-foreground">{selectedStudent.fullName || `${selectedStudent.firstName} ${selectedStudent.lastName}`}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">First Name</span>
+                      <span className="font-medium text-foreground">{selectedStudent.firstName || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">Last Name</span>
+                      <span className="font-medium text-foreground">{selectedStudent.lastName || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">Gender</span>
+                      <span className="font-medium text-foreground">{selectedStudent.gender || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">Date of Birth</span>
+                      <span className="font-medium text-foreground">{selectedStudent.dateOfBirth || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">Aadhar Number</span>
+                      <span className="font-mono font-medium text-foreground">{selectedStudent.aadharNumber || '-'}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Section 2: Contact Details */}
+                <div>
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-primary mb-2.5">Contact Details</h4>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm bg-muted/10 p-3.5 rounded-xl border border-border">
+                    <div className="col-span-2">
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">Primary Email</span>
+                      <span className="font-medium text-foreground truncate block">{selectedStudent.mailId || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">Alternate Email</span>
+                      <span className="font-medium text-foreground truncate block">{selectedStudent.alternateMailId || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">Phone Number</span>
+                      <span className="font-medium text-foreground">{selectedStudent.phoneNumber || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">Alternate Phone</span>
+                      <span className="font-medium text-foreground">{selectedStudent.alternatePhoneNumber || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">City</span>
+                      <span className="font-medium text-foreground">{selectedStudent.city || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">State</span>
+                      <span className="font-medium text-foreground">{selectedStudent.state || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">Country</span>
+                      <span className="font-medium text-foreground">{selectedStudent.country || '-'}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Section 3: Academic Details */}
+                <div>
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-primary mb-2.5">Academic Details</h4>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm bg-muted/10 p-3.5 rounded-xl border border-border">
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">Roll Number</span>
+                      <span className="font-mono font-bold text-foreground">{selectedStudent.rollNumber}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">Branch</span>
+                      <span className="font-semibold text-foreground">{selectedStudent.branch}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">B.Tech CGPA</span>
+                      <span className="font-mono font-bold text-foreground">{selectedStudent.btechCgpa || '0.00'}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">B.Tech YOP</span>
+                      <span className="font-medium text-foreground">{selectedStudent.btechYop || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">Academic Year</span>
+                      <span className="font-medium text-foreground">{selectedStudent.academicYear || getAcademicYearFromYop(selectedStudent.btechYop)}</span>
+                    </div>
+                    <div className="col-span-2 sm:col-span-1">
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">College Name</span>
+                      <span className="font-medium text-foreground truncate block">
+                        {(!selectedStudent.collegeName || selectedStudent.collegeName.trim() === '-' || selectedStudent.collegeName.trim() === '') ? 'PlaceGO! College' : selectedStudent.collegeName}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">10th Percentage</span>
+                      <span className="font-mono font-medium text-foreground">{selectedStudent.tenthPercentage || '-'}%</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">10th YOP</span>
+                      <span className="font-medium text-foreground">{selectedStudent.tenthYop || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">10th Board</span>
+                      <span className="font-medium text-foreground truncate block">{selectedStudent.tenthBoard || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">12th Percentage</span>
+                      <span className="font-mono font-medium text-foreground">{selectedStudent.twelfthPercentage || '-'}%</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">12th YOP</span>
+                      <span className="font-medium text-foreground">{selectedStudent.twelfthYop || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">12th Board</span>
+                      <span className="font-medium text-foreground truncate block">{selectedStudent.twelfthBoard || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">Active Backlogs?</span>
+                      <span className="font-medium text-foreground">{selectedStudent.activeBacklogs || 'No'}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block text-[10px] font-semibold uppercase">No. of Backlogs</span>
+                      <span className="font-mono font-medium text-foreground">{selectedStudent.noOfBacklogs || '0'}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Placement History */}
+              <div className="border-t border-border pt-4">
+                <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">Placement Records</h3>
+                {(() => {
+                  const studentOffers = allPlacements.filter(
+                    (p) => p.id.toUpperCase() === selectedStudent.rollNumber.toUpperCase()
+                  )
+
+                  if (studentOffers.length === 0) {
+                    return (
+                      <div className="rounded-lg bg-muted/30 p-4 text-center text-sm text-muted-foreground border border-dashed">
+                        No placement offers or registrations found for this student.
+                      </div>
+                    )
+                  }
+
+                  return (
+                    <div className="space-y-3">
+                      {studentOffers.map((offer, idx) => (
+                        <div key={idx} className="rounded-lg border border-border p-4 bg-muted/10">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="font-bold text-sm text-foreground">{offer.company}</span>
+                            <span className="rounded-full bg-success/15 px-2 py-0.5 text-xs font-semibold text-success">
+                              Placed
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div>
+                              <span className="text-muted-foreground">Role:</span>
+                              <span className="ml-1.5 font-medium text-foreground">{offer.role}</span>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">Package:</span>
+                              <span className="ml-1.5 font-mono font-semibold text-foreground">{offer.package}</span>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">Drive Type:</span>
+                              <span className="ml-1.5 font-medium text-foreground">{offer.type}</span>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">Date:</span>
+                              <span className="ml-1.5 font-medium text-foreground">{offer.date}</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })()}
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end border-t border-border pt-4">
+              <button
+                onClick={() => setSelectedStudent(null)}
+                className="h-10 rounded-lg bg-primary px-5 text-sm font-semibold text-primary-foreground shadow-pop hover:opacity-95 transition-opacity"
+              >
+                Close Profile
+              </button>
+            </div>
           </div>
         </div>
       )}

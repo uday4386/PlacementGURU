@@ -8,10 +8,15 @@ import {
   loadPlacements,
   savePlacements,
   loadMasterRows,
+  loadPlacementForms,
+  loadFormSubmissions,
+  loadPlacementNotifications,
+  savePlacementNotifications,
   type CompanyDrive,
   type PlacementOffer,
   useStoreState,
 } from '../../lib/placeproStore'
+import { useAcademicYear } from '../../lib/AcademicYearContext'
 
 const statusColors: Record<string, string> = {
   Active: 'bg-success/10 text-success',
@@ -30,10 +35,29 @@ interface ParsedStudent {
   package: string
 }
 
+function generateNextCompanyId(existingCompanies: CompanyDrive[]): string {
+  let maxNum = 0
+  existingCompanies.forEach((comp) => {
+    if (comp.id) {
+      const match = comp.id.match(/^COMP-(\d+)/i)
+      if (match) {
+        const num = parseInt(match[1], 10)
+        if (!Number.isNaN(num) && num > maxNum) {
+          maxNum = num
+        }
+      }
+    }
+  })
+  return `COMP-${String(maxNum + 1).padStart(3, '0')}`
+}
+
 export function AdminCompaniesPage() {
   const navigate = useNavigate()
+  const { selectedYear } = useAcademicYear()
 
   const companiesList = useStoreState(loadCompanies) ?? []
+  const allForms = useStoreState(loadPlacementForms) ?? []
+  const allSubmissions = useStoreState(loadFormSubmissions) ?? []
 
   const [search, setSearch] = useState('')
   const [filterType, setFilterType] = useState('All')
@@ -52,6 +76,8 @@ export function AdminCompaniesPage() {
   const [pkgMin, setPkgMin] = useState('')
   const [pkgMax, setPkgMax] = useState('')
   const [academicYear, setAcademicYear] = useState('2025–26')
+  const [minCgpa, setMinCgpa] = useState('')
+  const [maxBacklogs, setMaxBacklogs] = useState('No Limit')
   const [remarks, setRemarks] = useState('')
 
   // Detailed Modal view states
@@ -237,6 +263,51 @@ export function AdminCompaniesPage() {
     )
 
     try {
+      // Generate notifications for selected/placed students
+      const selectedNotifs = parsedStudents.map(student => ({
+        id: `PNOTIF-${Date.now()}-${student.roll}-${Math.random().toString(36).substring(2, 5)}`,
+        rollNumber: student.roll.trim().toUpperCase(),
+        studentName: student.name,
+        company: company.name,
+        role: student.role,
+        package: student.package,
+        date: new Date().toISOString().split('T')[0],
+        type: 'Selection',
+        createdAt: new Date().toISOString(),
+        read: false,
+        academicYear: selectedYear
+      }))
+
+      // Find registration forms associated with this company to notify not selected candidates
+      const associatedForm = allForms.find(f => 
+        (f.companyName && f.companyName.toLowerCase() === company.name.toLowerCase()) || 
+        (f.name && f.name.toLowerCase().includes(company.name.toLowerCase()))
+      )
+      
+      let notSelectedNotifs: any[] = []
+      if (associatedForm) {
+        const formSubs = allSubmissions.filter(sub => sub.formId === associatedForm.id)
+        const selectedRolls = new Set(parsedStudents.map(s => s.roll.trim().toUpperCase()))
+        const unselectedSubs = formSubs.filter(sub => !selectedRolls.has(sub.roll.trim().toUpperCase()))
+        
+        notSelectedNotifs = unselectedSubs.map(sub => ({
+          id: `PNOTIF-${Date.now()}-${sub.roll}-${Math.random().toString(36).substring(2, 5)}`,
+          rollNumber: sub.roll.trim().toUpperCase(),
+          studentName: sub.name,
+          company: company.name,
+          role: `Thank you for participating in the ${company.name} recruitment drive. Unfortunately, you have not been selected in this drive. Keep trying, and wish you all the best for future opportunities!`,
+          package: '',
+          date: new Date().toISOString().split('T')[0],
+          type: 'announcement',
+          createdAt: new Date().toISOString(),
+          read: false,
+          academicYear: selectedYear
+        }))
+      }
+
+      const liveNotifications = loadPlacementNotifications() ?? []
+      savePlacementNotifications([...selectedNotifs, ...notSelectedNotifs, ...liveNotifications])
+
       await savePlacements([...newOffers, ...filteredCurrent])
       showToast(`Successfully uploaded selection list! Added ${newOffers.length} offers for ${company.name}.`)
       setShowPreviewModal(false)
@@ -286,6 +357,8 @@ export function AdminCompaniesPage() {
     setDriveMode(company.mode)
     setJobType(company.jobType)
     setAcademicYear(company.academicYear)
+    setMinCgpa(company.minCgpa ?? '')
+    setMaxBacklogs(company.maxBacklogs ?? 'No Limit')
     setRemarks(company.remarks ?? '')
     
     // Parse package range like "₹ 44–48 LPA" -> min=44, max=48
@@ -320,7 +393,9 @@ export function AdminCompaniesPage() {
               mode: driveMode,
               jobType,
               academicYear,
-              remarks: remarks.trim(),
+              remarks: (remarks.trim() + (minCgpa && minCgpa !== '0' ? ` [Min CGPA: ${minCgpa}]` : '') + (maxBacklogs && maxBacklogs !== 'No Limit' ? ` [Max Backlogs: ${maxBacklogs}]` : '')).trim(),
+              minCgpa,
+              maxBacklogs,
             }
           : c
       )
@@ -329,7 +404,7 @@ export function AdminCompaniesPage() {
     } else {
       // Create new company
       const newDrive: CompanyDrive = {
-        id: `COMP-${String(companiesList.length + 1).padStart(3, '0')}`,
+        id: generateNextCompanyId(companiesList),
         name: compName.trim(),
         sector,
         type,
@@ -341,9 +416,28 @@ export function AdminCompaniesPage() {
         mode: driveMode,
         jobType,
         academicYear,
-        remarks: remarks.trim(),
+        remarks: (remarks.trim() + (minCgpa && minCgpa !== '0' ? ` [Min CGPA: ${minCgpa}]` : '') + (maxBacklogs && maxBacklogs !== 'No Limit' ? ` [Max Backlogs: ${maxBacklogs}]` : '')).trim(),
+        minCgpa,
+        maxBacklogs,
       }
       saveCompanies([newDrive, ...companiesList])
+      
+      // Push notification for the new company drive
+      const notifications = loadPlacementNotifications() || []
+      notifications.unshift({
+        id: `notif-comp-${Date.now()}`,
+        rollNumber: '',
+        studentName: '',
+        company: newDrive.name,
+        role: newDrive.jobType || '',
+        package: newDrive.package || '',
+        date: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        read: false,
+        type: 'announcement',
+      })
+      savePlacementNotifications(notifications)
+      
       showToast(`Created drive for ${newDrive.name} successfully!`)
     }
 
@@ -363,6 +457,8 @@ export function AdminCompaniesPage() {
     setPkgMin('')
     setPkgMax('')
     setAcademicYear('2025–26')
+    setMinCgpa('')
+    setMaxBacklogs('No Limit')
     setRemarks('')
   }
 
@@ -460,45 +556,45 @@ export function AdminCompaniesPage() {
               </div>
             </div>
 
-            <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-border pt-4">
-                <button
-                  type="button"
-                  onClick={() => setViewingCompany(c)}
-                  className="inline-flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3.5 py-2 text-sm font-semibold text-primary hover:bg-primary/10 cursor-pointer transition"
-                >
-                  <ExternalLink className="h-4 w-4" /> View Details
-                </button>
-                <button
-                  type="button"
-                  onClick={() => openEditCompanyModal(c)}
-                  className="inline-flex items-center gap-2 rounded-lg border border-amber-400/30 bg-amber-50 px-3.5 py-2 text-sm font-semibold text-amber-700 hover:bg-amber-100 cursor-pointer transition dark:bg-amber-500/10 dark:text-amber-400 dark:hover:bg-amber-500/20"
-                >
-                  <Edit className="h-4 w-4" /> Edit
-                </button>
-                <label className="inline-flex items-center gap-2 rounded-lg border border-emerald-400/30 bg-emerald-50 px-3.5 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100 cursor-pointer transition dark:bg-emerald-500/10 dark:text-emerald-400 dark:hover:bg-emerald-500/20">
-                  <FileSpreadsheet className="h-4 w-4" />
-                  Upload Excel
-                  <input
-                    type="file"
-                    accept=".xlsx, .xls"
-                    onChange={(e) => handleExcelUpload(e, c.id)}
-                    className="hidden"
-                  />
-                </label>
-                <button
-                  type="button"
-                  onClick={() => downloadCompanySelections(c)}
-                  className="inline-flex items-center gap-2 rounded-lg border border-blue-400/30 bg-blue-50 px-3.5 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 cursor-pointer transition dark:bg-blue-500/10 dark:text-blue-400 dark:hover:bg-blue-500/20"
-                >
-                  <Download className="h-4 w-4" /> Download
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleDeleteCompany(c.id)}
-                  className="inline-flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3.5 py-2 text-sm font-semibold text-destructive hover:bg-destructive/10 cursor-pointer transition"
-                >
-                  <Trash2 className="h-4 w-4" /> Delete
-                </button>
+            <div className="mt-4 grid grid-cols-2 gap-2 border-t border-border pt-4">
+              <button
+                type="button"
+                onClick={() => setViewingCompany(c)}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/10 cursor-pointer transition"
+              >
+                <ExternalLink className="h-3.5 w-3.5 shrink-0" /> View Details
+              </button>
+              <button
+                type="button"
+                onClick={() => openEditCompanyModal(c)}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-amber-400/30 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-100 cursor-pointer transition dark:bg-amber-500/10 dark:text-amber-400 dark:hover:bg-amber-500/20"
+              >
+                <Edit className="h-3.5 w-3.5 shrink-0" /> Edit
+              </button>
+              <label className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-emerald-400/30 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 cursor-pointer transition dark:bg-emerald-500/10 dark:text-emerald-400 dark:hover:bg-emerald-500/20">
+                <FileSpreadsheet className="h-3.5 w-3.5 shrink-0" />
+                Upload Excel
+                <input
+                  type="file"
+                  accept=".xlsx, .xls"
+                  onChange={(e) => handleExcelUpload(e, c.id)}
+                  className="hidden"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => downloadCompanySelections(c)}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-blue-400/30 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100 cursor-pointer transition dark:bg-blue-500/10 dark:text-blue-400 dark:hover:bg-blue-500/20"
+              >
+                <Download className="h-3.5 w-3.5 shrink-0" /> Download
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteCompany(c.id)}
+                className="col-span-2 inline-flex items-center justify-center gap-1.5 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs font-semibold text-destructive hover:bg-destructive/10 cursor-pointer transition"
+              >
+                <Trash2 className="h-3.5 w-3.5 shrink-0" /> Delete Drive
+              </button>
             </div>
           </div>
         ))}
@@ -645,12 +741,39 @@ export function AdminCompaniesPage() {
                   <label className="text-xs font-semibold text-muted-foreground uppercase">Max Package (LPA)</label>
                   <input
                     type="number"
-                    required
                     placeholder="e.g. 15"
                     value={pkgMax}
                     onChange={(e) => setPkgMax(e.target.value)}
                     className="mt-1 h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none"
                   />
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2 border border-primary/20 bg-primary/5 p-3 rounded-lg">
+                <div>
+                  <label className="text-[11px] font-bold text-primary uppercase block">Min CGPA Required</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="e.g. 7.0 (0 for no cutoff)"
+                    value={minCgpa}
+                    onChange={(e) => setMinCgpa(e.target.value)}
+                    className="mt-1 h-10 w-full rounded-lg border border-input bg-background px-3 text-sm font-mono outline-none transition focus:border-ring focus:ring-2 focus:ring-ring"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-bold text-primary uppercase block">Max Active Backlogs Allowed</label>
+                  <select
+                    value={maxBacklogs}
+                    onChange={(e) => setMaxBacklogs(e.target.value)}
+                    className="mt-1 h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring"
+                  >
+                    <option value="No Limit">No Limit</option>
+                    <option value="0">0 (No Active Backlogs)</option>
+                    <option value="1">At most 1 Backlog</option>
+                    <option value="2">At most 2 Backlogs</option>
+                    <option value="3">At most 3 Backlogs</option>
+                  </select>
                 </div>
               </div>
 

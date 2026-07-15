@@ -2,10 +2,12 @@ import { BrowserRouter, Navigate, Route, Routes, useSearchParams } from 'react-r
 import { lazy, Suspense } from 'react'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { getAuthSession, getPortalPath } from './lib/auth'
+import { AcademicYearProvider } from './lib/AcademicYearContext'
 
 const HomePage = lazy(() => import('./pages/HomePage').then((m) => ({ default: m.HomePage })))
 const LoginPage = lazy(() => import('./pages/LoginPage').then((m) => ({ default: m.LoginPage })))
 const AdminLayout = lazy(() => import('./pages/AdminDashboard').then((m) => ({ default: m.AdminLayout })))
+const AdminHomePage = lazy(() => import('./pages/admin/AdminHomePage').then((m) => ({ default: m.AdminHomePage })))
 const AdminStudentsPage = lazy(() => import('./pages/admin/AdminStudentsPage').then((m) => ({ default: m.AdminStudentsPage })))
 const AdminFormsPage = lazy(() => import('./pages/admin/AdminFormsPage').then((m) => ({ default: m.AdminFormsPage })))
 const AdminCompaniesPage = lazy(() => import('./pages/admin/AdminCompaniesPage').then((m) => ({ default: m.AdminCompaniesPage })))
@@ -14,6 +16,9 @@ const AdminPlacementsPage = lazy(() => import('./pages/admin/AdminPlacementsPage
 const AdminNotificationsPage = lazy(() => import('./pages/admin/AdminNotificationsPage').then((m) => ({ default: m.AdminNotificationsPage })))
 const AdminAuditPage = lazy(() => import('./pages/admin/AdminAuditPage').then((m) => ({ default: m.AdminAuditPage })))
 const AdminSettingsPage = lazy(() => import('./pages/admin/AdminSettingsPage').then((m) => ({ default: m.AdminSettingsPage })))
+
+const AdminComparisonPage = lazy(() => import('./pages/admin/AdminComparisonPage').then((m) => ({ default: m.AdminComparisonPage })))
+const AdminReportsPage = lazy(() => import('./pages/admin/AdminReportsPage').then((m) => ({ default: m.AdminReportsPage })))
 const StudentLayout = lazy(() => import('./pages/StudentDashboard').then((m) => ({ default: m.StudentLayout })))
 const StudentHomePage = lazy(() => import('./pages/student/StudentHomePage').then((m) => ({ default: m.StudentHomePage })))
 const StudentRegistrationPage = lazy(() => import('./pages/student/StudentRegistrationPage').then((m) => ({ default: m.StudentRegistrationPage })))
@@ -59,12 +64,16 @@ function AppShell() {
           </ProtectedRoute>
         }
       >
-        <Route index element={<AdminEligibilityPage />} />
+        <Route index element={<AdminHomePage />} />
         <Route path="students" element={<AdminStudentsPage />} />
         <Route path="forms" element={<AdminFormsPage />} />
         <Route path="companies" element={<AdminCompaniesPage />} />
         <Route path="eligibility" element={<AdminEligibilityPage />} />
         <Route path="placements" element={<AdminPlacementsPage />} />
+        <Route path="academic-years" element={<Navigate to="/admin/settings" replace />} />
+
+        <Route path="comparison" element={<AdminComparisonPage />} />
+        <Route path="reports" element={<AdminReportsPage />} />
         <Route path="notifications" element={<AdminNotificationsPage />} />
         <Route path="audit" element={<AdminAuditPage />} />
         <Route path="settings" element={<AdminSettingsPage />} />
@@ -109,17 +118,19 @@ function AppShell() {
 
 function App() {
   return (
-    <BrowserRouter>
-      <Suspense
-        fallback={
-          <div className="flex min-h-screen items-center justify-center bg-muted/40 text-sm font-medium text-muted-foreground">
-            Loading CampusConnect portal...
-          </div>
-        }
-      >
-        <AppShell />
-      </Suspense>
-    </BrowserRouter>
+    <AcademicYearProvider>
+      <BrowserRouter>
+        <Suspense
+          fallback={
+            <div className="flex min-h-screen items-center justify-center bg-muted/40 text-sm font-medium text-muted-foreground">
+              Loading PlaceGO! portal...
+            </div>
+          }
+        >
+          <AppShell />
+        </Suspense>
+      </BrowserRouter>
+    </AcademicYearProvider>
   )
 }
 

@@ -93,17 +93,46 @@ export function CoordinatorReportsPage() {
     const drive = companiesList.find((c) => c.id === selectedDriveId)
     if (!drive) return
 
-    // Parse minimum CGPA criteria
+    // Parse minimum CGPA criteria and backlogs
     let minCgpa = 6.0
-    if (drive.remarks && drive.remarks.includes('CGPA')) {
-      const matches = drive.remarks.match(/CGPA\s*(?:>=|>|of)?\s*([0-9.]+)/i)
-      if (matches && matches[1]) minCgpa = parseFloat(matches[1])
+    const explicitCgpaStr = drive.minCgpa || ''
+    if (explicitCgpaStr && !Number.isNaN(parseFloat(explicitCgpaStr)) && parseFloat(explicitCgpaStr) > 0) {
+      minCgpa = parseFloat(explicitCgpaStr)
+    } else {
+      const cgpaMatch = (drive.remarks || '').match(/cgpa(?:[\s:>=-]|of|min|minimum|req|required|cutoff|at least|or above|for|to|apply|is)*([0-9.]+)/i)
+      if (cgpaMatch && cgpaMatch[1] && !Number.isNaN(parseFloat(cgpaMatch[1])) && parseFloat(cgpaMatch[1]) > 0) {
+        minCgpa = parseFloat(cgpaMatch[1])
+      }
     }
 
-    // Filter students meeting CGPA
-    const eligibleStudents = deptStudents.filter(
-      (s) => (parseFloat(s.btechCgpa) || 0) >= minCgpa
-    )
+    let maxBacklogsAllowed = -1
+    const explicitBacklogsStr = drive.maxBacklogs || ''
+    if (explicitBacklogsStr && explicitBacklogsStr !== 'No Limit' && !Number.isNaN(parseInt(explicitBacklogsStr))) {
+      maxBacklogsAllowed = parseInt(explicitBacklogsStr)
+    } else if (explicitBacklogsStr === 'No Limit') {
+      maxBacklogsAllowed = -1
+    } else {
+      if ((drive.remarks || '').toLowerCase().includes('backlog')) {
+        const matches = (drive.remarks || '').match(/(?:max|maximum|at most|upto|up to|no more than|allow|allowed|req|required|min|minimum)?[\s:=]*(\d+)[\s:=]*(?:active\s*)?backlog/i)
+        if (matches && matches[1]) {
+          maxBacklogsAllowed = parseInt(matches[1])
+        } else if ((drive.remarks || '').toLowerCase().includes('no backlogs') || (drive.remarks || '').toLowerCase().includes('0 backlog') || (drive.remarks || '').toLowerCase().includes('zero backlog')) {
+          maxBacklogsAllowed = 0
+        } else {
+          const postMatches = (drive.remarks || '').match(/backlog[s]?(?:[\s:<=>-]|of|max|maximum|at most|allow|allowed|req|required|min|minimum|to|apply|is)*(\d+)/i)
+          if (postMatches && postMatches[1]) {
+            maxBacklogsAllowed = parseInt(postMatches[1])
+          }
+        }
+      }
+    }
+
+    // Filter students meeting CGPA and backlogs
+    const eligibleStudents = deptStudents.filter((s) => {
+      const cgpaPass = minCgpa <= 0 || (parseFloat(s.btechCgpa) || 0) >= minCgpa
+      const backlogsPass = maxBacklogsAllowed === -1 || (parseInt(s.noOfBacklogs || (s.activeBacklogs === 'Yes' ? '1' : '0')) || 0) <= maxBacklogsAllowed
+      return cgpaPass && backlogsPass
+    })
 
     const exportData = eligibleStudents.map((s) => ({
       'Roll Number': s.rollNumber,

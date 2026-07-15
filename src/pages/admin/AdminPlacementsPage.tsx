@@ -16,8 +16,15 @@ import {
   useStoreState,
 } from '../../lib/placeproStore'
 import { getShortBranchName, getAllShortBranches } from '../../lib/branchUtils'
+import {
+  getAcademicYearFromDate,
+  getAcademicYearFromYop,
+  normalizeAcademicYear,
+  useAcademicYear,
+} from '../../lib/AcademicYearContext'
 
 export function AdminPlacementsPage() {
+  const { selectedYear } = useAcademicYear()
   const [searchParams] = useSearchParams()
   const tabParam = searchParams.get('tab')
   const formIdParam = searchParams.get('formId')
@@ -28,9 +35,16 @@ export function AdminPlacementsPage() {
     }
     return 'repository'
   })
-  const placementsList = useStoreState(loadPlacements) ?? []
+  const allPlacements = useStoreState(loadPlacements) ?? []
 
   const [search, setSearch] = useState('')
+  const [showRepoFilters, setShowRepoFilters] = useState(false)
+  const [repoFilterCompany, setRepoFilterCompany] = useState('All')
+  const [repoFilterRole, setRepoFilterRole] = useState('All')
+  const [repoFilterType, setRepoFilterType] = useState('All')
+  const [repoFilterDate, setRepoFilterDate] = useState('')
+  const [repoFilterPackage, setRepoFilterPackage] = useState('')
+  const [repoFilterBranch, setRepoFilterBranch] = useState('All')
   const [toastMessage, setToastMessage] = useState<string | null>(null)
 
   // Edit modal state
@@ -49,9 +63,42 @@ export function AdminPlacementsPage() {
   // Delete confirmation
   const [deleteIdx, setDeleteIdx] = useState<number | null>(null)
 
-  const formsList = useStoreState(loadPlacementForms) ?? []
+  const allForms = useStoreState(loadPlacementForms) ?? []
   const allSubmissions = useStoreState(loadFormSubmissions) ?? []
-  const masterRows = useStoreState(loadMasterRows) ?? []
+  const allMasterRows = useStoreState(loadMasterRows) ?? []
+  const allCompanies = useStoreState(loadCompanies) ?? []
+
+  const placementsList = useMemo(
+    () =>
+      allPlacements.filter(
+        (placement) => (placement.academicYear || getAcademicYearFromDate(placement.date)) === selectedYear,
+      ),
+    [allPlacements, selectedYear],
+  )
+  const formsList = useMemo(
+    () =>
+      allForms.filter((form) => {
+        const companyYear = normalizeAcademicYear(form.academicYear || form.companyAcademicYear || '')
+        return companyYear
+          ? companyYear === selectedYear
+          : getAcademicYearFromDate(form.created) === selectedYear
+      }),
+    [allForms, selectedYear],
+  )
+  const masterRows = useMemo(
+    () =>
+      allMasterRows.filter(
+        (row) => (row.academicYear || getAcademicYearFromYop(row.btechYop)) === selectedYear,
+      ),
+    [allMasterRows, selectedYear],
+  )
+  const companiesList = useMemo(
+    () =>
+      allCompanies.filter(
+        (company) => normalizeAcademicYear(company.academicYear) === selectedYear,
+      ),
+    [allCompanies, selectedYear],
+  )
 
 
 
@@ -72,18 +119,66 @@ export function AdminPlacementsPage() {
   const [filterBranch, setFilterBranch] = useState('All')
   const [filterMinCgpa, setFilterMinCgpa] = useState('')
   const [filterMaxBacklogs, setFilterMaxBacklogs] = useState('')
+  const [filterSpecialConcerns, setFilterSpecialConcerns] = useState('')
 
   // Company exclusion filter states
   const [excludedCompanies, setExcludedCompanies] = useState<string[]>([])
   const [companySearch, setCompanySearch] = useState('')
   const hasInitializedExclusions = useRef(false)
+  const knownCompaniesRef = useRef<Set<string>>(new Set())
+
+  const [selectedComparisonColumns, setSelectedComparisonColumns] = useState<string[]>([
+    'Roll Number',
+    'Student Name',
+    'Branch',
+    'CGPA',
+    'Status',
+  ])
+  const [showComparisonColSelector, setShowComparisonColSelector] = useState(false)
+
+  const comparisonColumnsList = useMemo(() => {
+    const selectedForm = formsList.find((f) => f.id === selectedFormId)
+    const standardCols = [
+      { key: 'Roll Number', label: 'Roll Number', default: true },
+      { key: 'Student Name', label: 'Student Name', default: true },
+      { key: 'Branch', label: 'Branch', default: true },
+      { key: 'CGPA', label: 'CGPA', default: true },
+      { key: '10th %', label: '10th %', default: false },
+      { key: '12th %', label: '12th %', default: false },
+      { key: 'Active Backlogs', label: 'Active Backlogs', default: false },
+      { key: 'Email', label: 'Email', default: false },
+      { key: 'Phone', label: 'Phone', default: false },
+      { key: 'Status', label: 'Status', default: true },
+    ]
+    if (!selectedForm) return standardCols
+    const standardKeys = new Set(standardCols.map((c) => c.key.toUpperCase()))
+    const customFields = selectedForm.fields
+      .filter((f) => !standardKeys.has(f.label.toUpperCase()))
+      .map((f) => ({
+        key: f.label,
+        label: f.label,
+        default: false,
+      }))
+    return [...standardCols, ...customFields]
+  }, [selectedFormId, formsList])
+
+  const prevFormIdForColsRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (selectedFormId !== prevFormIdForColsRef.current) {
+      prevFormIdForColsRef.current = selectedFormId
+      const defaults = comparisonColumnsList.filter((col) => col.default).map((col) => col.key)
+      setSelectedComparisonColumns(defaults)
+      setShowComparisonColSelector(false)
+    }
+  }, [selectedFormId, comparisonColumnsList])
 
   const allUniqueCompanies = useMemo(() => {
     const fromPlacements = placementsList.map((p) => p.company.trim())
-    const fromCompanies = loadCompanies().map((c) => c.name.trim())
+    const fromCompanies = companiesList.map((c) => c.name.trim())
     const merged = Array.from(new Set([...fromPlacements, ...fromCompanies]))
     return merged.sort((a, b) => a.localeCompare(b))
-  }, [placementsList])
+  }, [companiesList, placementsList])
 
   const displayedCompanies = useMemo(() => {
     return allUniqueCompanies.filter((c) =>
@@ -95,20 +190,32 @@ export function AdminPlacementsPage() {
     if (!hasInitializedExclusions.current && allUniqueCompanies.length > 0) {
       setExcludedCompanies(allUniqueCompanies)
       hasInitializedExclusions.current = true
-    } else {
+      knownCompaniesRef.current = new Set(allUniqueCompanies)
+    } else if (hasInitializedExclusions.current) {
+      const brandNewCompanies = allUniqueCompanies.filter((c) => !knownCompaniesRef.current.has(c))
+      knownCompaniesRef.current = new Set(allUniqueCompanies)
+
       setExcludedCompanies((prev) => {
         const stillExists = prev.filter((c) => allUniqueCompanies.includes(c))
-        const added = allUniqueCompanies.filter((c) => !prev.includes(c))
-        if (added.length > 0) {
-          return [...stillExists, ...added]
+        if (brandNewCompanies.length > 0) {
+          return [...stillExists, ...brandNewCompanies]
         }
-        return stillExists
+        if (stillExists.length !== prev.length) {
+          return stillExists
+        }
+        return prev
       })
     }
   }, [allUniqueCompanies])
 
   useEffect(() => {
-    if (formsList.length > 0 && !selectedFormId) {
+    if (formsList.length === 0) {
+      if (selectedFormId) setSelectedFormId('')
+      return
+    }
+
+    const hasSelectedForm = formsList.some((form) => form.id === selectedFormId)
+    if (!hasSelectedForm) {
       setSelectedFormId(formIdParam || formsList[0].id)
     }
   }, [formsList, selectedFormId, formIdParam])
@@ -125,13 +232,26 @@ export function AdminPlacementsPage() {
     return (sum / placementsList.length).toFixed(1)
   }, [placementsList])
 
-  const filteredPlacements = placementsList.filter(
-    (p) =>
+  const uniqueRepoCompanies = useMemo(() => Array.from(new Set(placementsList.map((p) => p.company))).sort(), [placementsList])
+  const uniqueRepoRoles = useMemo(() => Array.from(new Set(placementsList.map((p) => p.role))).sort(), [placementsList])
+  const uniqueRepoBranches = useMemo(() => Array.from(new Set(placementsList.map((p) => p.branch))).sort(), [placementsList])
+
+  const filteredPlacements = placementsList.filter((p) => {
+    const matchesSearch =
       p.student.toLowerCase().includes(search.toLowerCase()) ||
       p.id.toLowerCase().includes(search.toLowerCase()) ||
       p.company.toLowerCase().includes(search.toLowerCase()) ||
-      p.branch.toLowerCase().includes(search.toLowerCase()),
-  )
+      p.branch.toLowerCase().includes(search.toLowerCase())
+
+    const matchesCompany = repoFilterCompany === 'All' || p.company === repoFilterCompany
+    const matchesRole = repoFilterRole === 'All' || p.role === repoFilterRole
+    const matchesType = repoFilterType === 'All' || p.type === repoFilterType
+    const matchesDate = !repoFilterDate || p.date === repoFilterDate
+    const matchesPackage = !repoFilterPackage || p.package.includes(repoFilterPackage)
+    const matchesBranch = repoFilterBranch === 'All' || p.branch === repoFilterBranch
+
+    return matchesSearch && matchesCompany && matchesRole && matchesType && matchesDate && matchesPackage && matchesBranch
+  })
 
   function openEditModal(idx: number) {
     const p = placementsList[idx]
@@ -175,7 +295,7 @@ export function AdminPlacementsPage() {
       email: editEmail.trim() || undefined,
       phone: editPhone.trim() || undefined,
     }
-    savePlacements(placementsList.map((p, i) => (i === editingIdx ? updated : p)))
+    savePlacements(allPlacements.map((p, i) => (i === editingIdx ? updated : p)))
     addPlacementNotification(updated)
     setEditingIdx(null)
     showToast(`Updated placement record for ${updated.student}.`)
@@ -183,7 +303,7 @@ export function AdminPlacementsPage() {
 
   function handleDelete(idx: number) {
     const p = placementsList[idx]
-    savePlacements(placementsList.filter((_, i) => i !== idx))
+    savePlacements(allPlacements.filter((_, i) => i !== idx))
     setDeleteIdx(null)
     showToast(`Deleted placement record for ${p?.student ?? 'student'}.`)
   }
@@ -240,7 +360,7 @@ export function AdminPlacementsPage() {
       phone: manualPhone.trim() || undefined,
     }
 
-    savePlacements([newOffer, ...placementsList])
+    savePlacements([newOffer, ...allPlacements])
     addPlacementNotification(newOffer)
     
     setManualName('')
@@ -262,9 +382,37 @@ export function AdminPlacementsPage() {
     if (!selectedFormId) return []
     const formSubs = allSubmissions.filter((sub) => sub.formId === selectedFormId)
 
+    const specialRolls = new Set(
+      filterSpecialConcerns
+        .split(/[\s,]+/)
+        .map((r) => r.trim().toUpperCase())
+        .filter(Boolean)
+    )
+
     const byRoll = new Map<string, FormSubmission>()
     formSubs.forEach((sub) => {
       byRoll.set(sub.roll.trim().toUpperCase(), sub)
+    })
+
+    specialRolls.forEach((sRoll) => {
+      if (!byRoll.has(sRoll)) {
+        const mRow = masterRows.find(
+          (m) => m.rollNumber.trim().toUpperCase() === sRoll
+        )
+        byRoll.set(sRoll, {
+          id: `special-override-${sRoll}-${selectedFormId}`,
+          formId: selectedFormId,
+          roll: sRoll,
+          name: mRow ? (mRow.fullName || `${mRow.firstName} ${mRow.lastName}`.trim()) : 'Special Concern Student',
+          mail: mRow?.mailId || '',
+          values: {
+            Branch: mRow?.branch || '',
+            CGPA: mRow?.btechCgpa || '',
+            'NO OF BACKLOGS': mRow?.activeBacklogs || '0',
+          },
+          submittedAt: new Date().toISOString(),
+        } as any)
+      }
     })
 
     const uniqueSubs = Array.from(byRoll.values())
@@ -275,11 +423,20 @@ export function AdminPlacementsPage() {
     )
     const placedRolls = new Set(excludedPlacements.map((p) => p.id.trim().toUpperCase()))
 
-    const unplacedSubs = uniqueSubs.filter((sub) => !placedRolls.has(sub.roll.trim().toUpperCase()))
+    const unplacedSubs = uniqueSubs.filter((sub) => {
+      const subRoll = sub.roll.trim().toUpperCase()
+      if (specialRolls.has(subRoll)) return true
+      return !placedRolls.has(subRoll)
+    })
 
     return unplacedSubs.filter((sub) => {
+      const subRoll = sub.roll.trim().toUpperCase()
+      if (specialRolls.has(subRoll)) {
+        return true
+      }
+
       const mRow = masterRows.find(
-        (m) => m.rollNumber.trim().toUpperCase() === sub.roll.trim().toUpperCase()
+        (m) => m.rollNumber.trim().toUpperCase() === subRoll
       )
       
       if (filterBranch && filterBranch !== 'All') {
@@ -299,7 +456,21 @@ export function AdminPlacementsPage() {
 
       return true
     })
-  }, [allSubmissions, selectedFormId, placementsList, masterRows, filterBranch, filterMinCgpa, filterMaxBacklogs, excludedCompanies])
+  }, [allSubmissions, selectedFormId, placementsList, masterRows, filterBranch, filterMinCgpa, filterMaxBacklogs, filterSpecialConcerns, excludedCompanies])
+
+  function getComparisonCellValue(row: any, colKey: string, masterRow?: any) {
+    if (colKey === 'Roll Number') return row.roll
+    if (colKey === 'Student Name') return row.name
+    if (colKey === 'Branch') return masterRow?.branch || row.values['Branch'] || '-'
+    if (colKey === 'CGPA') return masterRow?.btechCgpa || row.values['CGPA'] || '-'
+    if (colKey === '10th %') return masterRow?.tenthPercentage || row.values['10th %'] || row.values['10TH'] || '-'
+    if (colKey === '12th %') return masterRow?.twelfthPercentage || row.values['12th %'] || row.values['12TH'] || '-'
+    if (colKey === 'Active Backlogs') return masterRow ? (masterRow.noOfBacklogs || masterRow.activeBacklogs || '0') : (row.values['Active Backlogs'] || row.values['NO OF BACKLOGS'] || '-')
+    if (colKey === 'Email') return masterRow?.mailId || row.values['Email'] || row.values['Mail ID'] || '-'
+    if (colKey === 'Phone') return masterRow?.phoneNumber || row.values['Phone'] || row.values['Phone Number'] || '-'
+    if (colKey === 'Status') return 'Unplaced & Eligible'
+    return row.values[colKey] || '-'
+  }
 
   function handleDownloadComparisonList() {
     const form = formsList.find((f) => f.id === selectedFormId)
@@ -309,16 +480,11 @@ export function AdminPlacementsPage() {
       const masterRow = masterRows.find(
         (m) => m.rollNumber.trim().toUpperCase() === submission.roll.trim().toUpperCase()
       )
-      return {
-        'Roll Number': submission.roll,
-        'Student Name': submission.name,
-        'Submitted At': submission.submittedAt,
-        'CGPA': masterRow?.btechCgpa || submission.values['CGPA'] || '-',
-        '10th %': masterRow?.tenthPercentage || '-',
-        '12th %': masterRow?.twelfthPercentage || '-',
-        'Branch': masterRow?.branch || submission.values['Branch'] || '-',
-        'Email': masterRow?.mailId || '-',
-      }
+      const result: Record<string, string> = {}
+      selectedComparisonColumns.forEach((colKey) => {
+        result[colKey] = getComparisonCellValue(submission, colKey, masterRow)
+      })
+      return result
     })
 
     const worksheet = XLSX.utils.json_to_sheet(exportRows)
@@ -345,8 +511,8 @@ export function AdminPlacementsPage() {
         </div>
         <button
           type="button"
-          onClick={() => showToast('Exported placement metrics report PDF.')}
-          className="inline-flex h-10 items-center gap-2 rounded-lg border border-input px-4 text-sm font-semibold hover:bg-muted cursor-pointer"
+          onClick={() => window.print()}
+          className="inline-flex h-10 items-center gap-2 rounded-lg border border-input px-4 text-sm font-semibold hover:bg-muted cursor-pointer print:hidden"
         >
           <Download className="h-4 w-4" /> Export report
         </button>
@@ -403,17 +569,117 @@ export function AdminPlacementsPage() {
                 className="h-10 w-full rounded-lg border border-input bg-background pl-9 pr-3 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring"
               />
             </div>
-            <button
-              type="button"
-              onClick={downloadOffersExcel}
-              className="inline-flex h-10 items-center gap-2 rounded-lg border border-input px-4 text-sm font-semibold hover:bg-muted cursor-pointer"
-            >
-              <Download className="h-4 w-4" /> Download Excel
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowRepoFilters(!showRepoFilters)}
+                className={`inline-flex h-10 items-center gap-2 rounded-lg border px-4 text-sm font-semibold cursor-pointer transition ${showRepoFilters ? 'bg-primary text-primary-foreground border-primary' : 'border-input hover:bg-muted'}`}
+              >
+                <Filter className="h-4 w-4" /> Filters
+              </button>
+              <button
+                type="button"
+                onClick={downloadOffersExcel}
+                className="inline-flex h-10 items-center gap-2 rounded-lg border border-input px-4 text-sm font-semibold hover:bg-muted cursor-pointer"
+              >
+                <Download className="h-4 w-4" /> Download Excel
+              </button>
+            </div>
           </div>
 
-          <div className="card-surface overflow-hidden">
-            <div className="overflow-x-auto">
+          {showRepoFilters && (
+            <div className="mb-4 grid grid-cols-2 gap-4 rounded-xl border border-border bg-muted/20 p-4 sm:grid-cols-3 md:grid-cols-6 animate-in slide-in-from-top-2">
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-muted-foreground">Company</label>
+                <select
+                  value={repoFilterCompany}
+                  onChange={(e) => setRepoFilterCompany(e.target.value)}
+                  className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm outline-none focus:border-primary"
+                >
+                  <option value="All">All Companies</option>
+                  {uniqueRepoCompanies.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-muted-foreground">Role</label>
+                <select
+                  value={repoFilterRole}
+                  onChange={(e) => setRepoFilterRole(e.target.value)}
+                  className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm outline-none focus:border-primary"
+                >
+                  <option value="All">All Roles</option>
+                  {uniqueRepoRoles.map((r) => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-muted-foreground">Type</label>
+                <select
+                  value={repoFilterType}
+                  onChange={(e) => setRepoFilterType(e.target.value)}
+                  className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm outline-none focus:border-primary"
+                >
+                  <option value="All">All Types</option>
+                  <option value="On-campus">On-campus</option>
+                  <option value="Off-campus">Off-campus</option>
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-muted-foreground">Branch</label>
+                <select
+                  value={repoFilterBranch}
+                  onChange={(e) => setRepoFilterBranch(e.target.value)}
+                  className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm outline-none focus:border-primary"
+                >
+                  <option value="All">All Branches</option>
+                  {uniqueRepoBranches.map((b) => (
+                    <option key={b} value={b}>{b}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-muted-foreground">Package (LPA)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. 5.0"
+                  value={repoFilterPackage}
+                  onChange={(e) => setRepoFilterPackage(e.target.value)}
+                  className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm outline-none focus:border-primary"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-muted-foreground">Date</label>
+                <input
+                  type="date"
+                  value={repoFilterDate}
+                  onChange={(e) => setRepoFilterDate(e.target.value)}
+                  className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm outline-none focus:border-primary"
+                />
+              </div>
+              <div className="col-span-full mt-2 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRepoFilterCompany('All')
+                    setRepoFilterRole('All')
+                    setRepoFilterType('All')
+                    setRepoFilterBranch('All')
+                    setRepoFilterPackage('')
+                    setRepoFilterDate('')
+                  }}
+                  className="text-xs font-semibold text-primary hover:underline cursor-pointer"
+                >
+                  Clear Filters
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="card-surface overflow-hidden print:overflow-visible">
+            <div className="overflow-x-auto print:overflow-visible">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border text-left text-muted-foreground">
@@ -425,7 +691,7 @@ export function AdminPlacementsPage() {
                     <th className="px-5 py-3 font-medium">Package</th>
                     <th className="px-5 py-3 font-medium">Date</th>
                     <th className="px-5 py-3 font-medium">Type</th>
-                    <th className="px-5 py-3 font-medium text-right">Actions</th>
+                    <th className="px-5 py-3 font-medium text-right print:hidden">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -458,18 +724,18 @@ export function AdminPlacementsPage() {
                           {p.type}
                         </span>
                       </td>
-                      <td className="px-5 py-3">
+                      <td className="px-5 py-3 print:hidden">
                         <div className="flex justify-end gap-1.5">
                           <button
                             type="button"
-                            onClick={() => openEditModal(placementsList.indexOf(p))}
+                            onClick={() => openEditModal(allPlacements.indexOf(p))}
                             className="inline-flex h-8 items-center gap-1 rounded border border-input px-2 text-xs font-semibold hover:bg-muted cursor-pointer"
                           >
                             <Pencil className="h-3.5 w-3.5" /> Edit
                           </button>
                           <button
                             type="button"
-                            onClick={() => setDeleteIdx(placementsList.indexOf(p))}
+                            onClick={() => setDeleteIdx(allPlacements.indexOf(p))}
                             className="inline-flex h-8 items-center gap-1 rounded bg-destructive/10 px-2 text-xs font-semibold text-destructive hover:bg-destructive/20 cursor-pointer"
                           >
                             <Trash2 className="h-3.5 w-3.5" /> Delete
@@ -506,7 +772,7 @@ export function AdminPlacementsPage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="text-xs font-semibold text-muted-foreground uppercase">Email Address</label>
-                    <input type="email" required placeholder="e.g. rahul@example.com" value={manualEmail} onChange={(e) => setManualEmail(e.target.value)} className="mt-1.5 h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring" />
+                    <input type="text" required placeholder="e.g. rahul@example.com" value={manualEmail} onChange={(e) => setManualEmail(e.target.value)} className="mt-1.5 h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring" />
                   </div>
                   <div>
                     <label className="text-xs font-semibold text-muted-foreground uppercase">Phone Number</label>
@@ -611,6 +877,11 @@ export function AdminPlacementsPage() {
                     <label className="text-xs font-semibold text-muted-foreground uppercase">Max Active Backlogs</label>
                     <input type="number" placeholder="e.g. 0" value={filterMaxBacklogs} onChange={(e) => setFilterMaxBacklogs(e.target.value)} className="mt-1.5 h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:border-ring" />
                   </div>
+                  <div className="border border-primary/20 bg-primary/5 p-3 rounded-lg space-y-1">
+                    <label className="text-xs font-bold text-primary uppercase block">Allow Special Concern / Override Rolls</label>
+                    <p className="text-[11px] text-muted-foreground">Enter Roll Numbers separated by commas to allow without eligibility checks (e.g. 21A91A0501, 21A91A0502)</p>
+                    <input type="text" placeholder="Roll Numbers..." value={filterSpecialConcerns} onChange={(e) => setFilterSpecialConcerns(e.target.value)} className="mt-1 h-9 w-full rounded-lg border border-input bg-background px-3 text-xs font-mono outline-none transition focus:border-ring" />
+                  </div>
                   
                   <div className="border-t border-border pt-4">
                     <div className="flex items-center justify-between">
@@ -688,19 +959,84 @@ export function AdminPlacementsPage() {
             </div>
             <div className="card-surface overflow-hidden md:col-span-2 flex flex-col justify-between">
               <div>
-                <div className="border-b border-border px-5 py-4 flex items-center justify-between">
-                  <h3 className="font-bold text-foreground">Eligible Students (Unplaced Only)</h3>
-                  <span className="rounded bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary font-mono">{dynamicComparisonList.length} qualified</span>
+                <div className="border-b border-border px-5 py-4 flex items-center justify-between gap-4">
+                  <div>
+                    <h3 className="font-bold text-foreground">Eligible Students (Unplaced Only)</h3>
+                    <p className="mt-0.5 text-[10px] text-muted-foreground">
+                      {dynamicComparisonList.length} qualified candidates match the current main-data filters.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowComparisonColSelector(!showComparisonColSelector)}
+                      className={`inline-flex h-8 items-center gap-1.5 rounded border px-2.5 text-xs font-semibold cursor-pointer transition-colors ${
+                        showComparisonColSelector
+                          ? 'border-primary bg-primary text-primary-foreground font-semibold'
+                          : 'border-input bg-background hover:bg-muted text-foreground'
+                      }`}
+                    >
+                      <Columns className="h-3.5 w-3.5" /> Columns
+                    </button>
+                  </div>
                 </div>
+
+                {/* Collapsible Column Selector */}
+                {showComparisonColSelector && (
+                  <div className="border-b border-border bg-muted/20 p-4 animate-in slide-in-from-top-2 duration-200">
+                    <div className="mb-3 flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                      <span>Select columns to display & download</span>
+                      <div className="flex gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedComparisonColumns(comparisonColumnsList.map((c) => c.key))}
+                          className="text-primary hover:underline font-bold normal-case cursor-pointer text-xs"
+                        >
+                          Select All
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedComparisonColumns(comparisonColumnsList.filter((c) => c.default).map((c) => c.key))}
+                          className="text-primary hover:underline font-bold normal-case cursor-pointer text-xs"
+                        >
+                          Reset Defaults
+                        </button>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 max-h-40 overflow-y-auto pr-1">
+                      {comparisonColumnsList.map((col) => (
+                        <label
+                          key={col.key}
+                          className="flex cursor-pointer items-center gap-2 rounded border border-border bg-background p-2 text-xs hover:bg-muted/40 transition-colors"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedComparisonColumns.includes(col.key)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedComparisonColumns([...selectedComparisonColumns, col.key])
+                              } else {
+                                setSelectedComparisonColumns(selectedComparisonColumns.filter((k) => k !== col.key))
+                              }
+                            }}
+                            className="rounded border-input text-primary focus:ring-primary h-3.5 w-3.5"
+                          />
+                          <span className="font-medium text-foreground truncate">{col.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div className="max-h-[500px] overflow-y-auto">
                   <table className="w-full text-xs text-left">
                     <thead>
                       <tr className="border-b border-border bg-muted/30 text-muted-foreground">
-                        <th className="px-5 py-2.5 font-medium">Roll Number</th>
-                        <th className="px-5 py-2.5 font-medium">Student Name</th>
-                        <th className="px-5 py-2.5 font-medium">Branch</th>
-                        <th className="px-5 py-2.5 font-medium">CGPA</th>
-                        <th className="px-5 py-2.5 font-medium">Status</th>
+                        {comparisonColumnsList.filter((col) => selectedComparisonColumns.includes(col.key)).map((col) => (
+                          <th key={col.key} className="px-5 py-2.5 font-medium">
+                            {col.label}
+                          </th>
+                        ))}
                       </tr>
                     </thead>
                     <tbody>
@@ -708,20 +1044,46 @@ export function AdminPlacementsPage() {
                         const mRow = masterRows.find((m) => m.rollNumber.trim().toUpperCase() === s.roll.trim().toUpperCase())
                         return (
                           <tr key={s.id} className="border-b border-border last:border-0 hover:bg-muted/20">
-                            <td className="px-5 py-2.5">
-                              <Link to={`/admin/students?search=${s.roll}`} className="text-primary hover:underline font-mono">
-                                {s.roll}
-                              </Link>
-                            </td>
-                            <td className="px-5 py-2.5 font-bold">{s.name}</td>
-                            <td className="px-5 py-2.5">{mRow?.branch || s.values['Branch'] || '-'}</td>
-                            <td className="px-5 py-2.5 font-mono">{mRow?.btechCgpa || s.values['CGPA'] || '-'}</td>
-                            <td className="px-5 py-2.5"><span className="rounded bg-success/15 px-1.5 py-0.5 text-[10px] font-bold text-success">Unplaced & Eligible</span></td>
+                            {comparisonColumnsList.filter((col) => selectedComparisonColumns.includes(col.key)).map((col) => {
+                              const val = getComparisonCellValue(s, col.key, mRow)
+                              if (col.key === 'Roll Number') {
+                                return (
+                                  <td key={col.key} className="px-5 py-2.5">
+                                    <Link to={`/admin/students?search=${s.roll}`} className="text-primary hover:underline font-mono">
+                                      {val}
+                                    </Link>
+                                  </td>
+                                )
+                              }
+                              if (col.key === 'Status') {
+                                return (
+                                  <td key={col.key} className="px-5 py-2.5">
+                                    <span className="rounded bg-success/15 px-1.5 py-0.5 text-[10px] font-bold text-success">
+                                      {val}
+                                    </span>
+                                  </td>
+                                )
+                              }
+                              return (
+                                <td
+                                  key={col.key}
+                                  className={`px-5 py-2.5 ${col.key === 'Roll Number' || col.key === '10th %' || col.key === '12th %' || col.key === 'CGPA' || col.key === 'Active Backlogs' ? 'font-mono' : ''} ${
+                                    col.key === 'Student Name' ? 'font-bold text-foreground' : ''
+                                  }`}
+                                >
+                                  {val}
+                                </td>
+                              )
+                            })}
                           </tr>
                         )
                       })}
                       {dynamicComparisonList.length === 0 && (
-                        <tr><td colSpan={5} className="px-5 py-8 text-center text-muted-foreground italic">No eligible unplaced candidates found for the selected drive/filters.</td></tr>
+                        <tr>
+                          <td colSpan={selectedComparisonColumns.length || 1} className="px-5 py-8 text-center text-muted-foreground italic">
+                            No eligible unplaced candidates found for the selected drive/filters.
+                          </td>
+                        </tr>
                       )}
                     </tbody>
                   </table>
@@ -772,7 +1134,7 @@ export function AdminPlacementsPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="text-xs font-semibold text-muted-foreground uppercase">Email</label>
-                  <input type="email" value={editEmail} onChange={(e) => setEditEmail(e.target.value)} className="mt-1.5 h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring" />
+                  <input type="text" value={editEmail} onChange={(e) => setEditEmail(e.target.value)} className="mt-1.5 h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring" />
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-muted-foreground uppercase">Phone</label>
@@ -826,7 +1188,7 @@ export function AdminPlacementsPage() {
           <div className="w-full max-w-sm card-surface p-6 shadow-pop animate-in zoom-in-95 duration-200">
             <h2 className="text-lg font-bold text-foreground">Delete Placement Record</h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              Are you sure you want to delete the placement record for <strong>{placementsList[deleteIdx]?.student}</strong> at <strong>{placementsList[deleteIdx]?.company}</strong>? This action cannot be undone.
+              Are you sure you want to delete the placement record for <strong>{allPlacements[deleteIdx]?.student}</strong> at <strong>{allPlacements[deleteIdx]?.company}</strong>? This action cannot be undone.
             </p>
             <div className="mt-6 flex justify-end gap-2">
               <button type="button" onClick={() => setDeleteIdx(null)} className="h-10 rounded-lg border border-input px-4 text-sm font-semibold hover:bg-muted">Cancel</button>

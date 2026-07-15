@@ -1,8 +1,12 @@
 import { useState, useMemo } from 'react'
-import { Briefcase, Search } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
+import { Briefcase, Search, Download } from 'lucide-react'
+import * as XLSX from 'xlsx'
 import { getAuthSession } from '../../lib/auth'
 import { loadPlacements, loadMasterRows, useStoreState } from '../../lib/placeproStore'
 import { matchesBranch, getShortBranchName } from '../../lib/branchUtils'
+import jsPDF from 'jspdf'
+import autoTable from 'jspdf-autotable'
 
 export function CoordinatorPlacementsPage() {
   const session = getAuthSession()
@@ -11,7 +15,9 @@ export function CoordinatorPlacementsPage() {
   const placements = useStoreState(loadPlacements) ?? []
   const masterRows = useStoreState(loadMasterRows) ?? []
 
-  const [search, setSearch] = useState('')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const search = searchParams.get('q') || ''
+  const [filterCompany, setFilterCompany] = useState('All')
 
   // Filter department placements
   const branchPlacements = useMemo(() => {
@@ -23,17 +29,83 @@ export function CoordinatorPlacementsPage() {
     })
   }, [placements, masterRows, coordDept])
 
-  // Search filter
+  // Get unique companies list
+  const companies = useMemo(() => {
+    const list = new Set(branchPlacements.map((p) => p.company.trim()))
+    return ['All', ...Array.from(list).sort()]
+  }, [branchPlacements])
+
+  // Search and Company filter
   const filteredPlacements = useMemo(() => {
     return branchPlacements.filter((p) => {
-      return (
+      const matchCompany = filterCompany === 'All' || p.company.trim().toLowerCase() === filterCompany.trim().toLowerCase()
+      const matchSearch =
         p.student.toLowerCase().includes(search.toLowerCase()) ||
         p.id.toLowerCase().includes(search.toLowerCase()) ||
         p.company.toLowerCase().includes(search.toLowerCase()) ||
         p.role.toLowerCase().includes(search.toLowerCase())
-      )
+      return matchCompany && matchSearch
     })
-  }, [branchPlacements, search])
+  }, [branchPlacements, search, filterCompany])
+
+  function handleExtractExcel() {
+    const exportRows = filteredPlacements.map((p) => ({
+      'Student Name': p.student,
+      'Roll Number': p.id,
+      'Branch': p.branch,
+      'Company': p.company,
+      'Role': p.role,
+      'Package': p.package,
+      'Date': p.date,
+      'Type': p.type,
+      'Email': p.email || '',
+      'Phone': p.phone || '',
+    }))
+    const worksheet = XLSX.utils.json_to_sheet(exportRows)
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Branch Placements')
+    XLSX.writeFile(workbook, `${getShortBranchName(coordDept).toLowerCase()}_placements_extract.xlsx`)
+  }
+
+  function handleExtractPdf() {
+    const doc = new jsPDF()
+    
+    // Add title & headers
+    doc.setFontSize(18)
+    doc.text(`${getShortBranchName(coordDept)} Placements Report`, 14, 20)
+    
+    doc.setFontSize(10)
+    doc.setFont('helvetica', 'normal')
+    doc.text(`Academic Year: ${(session as any)?.academicYear || 'Current Year'}`, 14, 28)
+    doc.text(`Generated on: ${new Date().toLocaleDateString()}`, 14, 34)
+    doc.text(`Total Placements: ${filteredPlacements.length}`, 14, 40)
+    doc.text(`Filtered by Company: ${filterCompany === 'All' ? 'All Companies' : filterCompany}`, 14, 46)
+
+    // Prepare table headers and rows
+    const headers = [['Roll Number', 'Student Name', 'Company', 'Role', 'Package', 'Type']]
+    const data = filteredPlacements.map((p) => [
+      p.id,
+      p.student,
+      p.company,
+      p.role,
+      p.package ? p.package.replace(/₹/g, 'Rs.').trim() : '',
+      p.type,
+    ])
+
+    // Generate table using autoTable
+    // @ts-ignore
+    autoTable(doc, {
+      head: headers,
+      body: data,
+      startY: 52,
+      styles: { fontSize: 9, cellPadding: 3 },
+      headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], fontStyle: 'bold' },
+      alternateRowStyles: { fillColor: [249, 250, 251] },
+      margin: { top: 52, left: 14, right: 14 }
+    })
+
+    doc.save(`${getShortBranchName(coordDept).toLowerCase()}_placements_report.pdf`)
+  }
 
   // Placement analytics specifically for this branch
   const metrics = useMemo(() => {
@@ -97,10 +169,48 @@ export function CoordinatorPlacementsPage() {
           <input
             placeholder="Search offers by company, student, roll number, or role..."
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => {
+              const val = event.target.value
+              setSearchParams((prev) => {
+                if (val) {
+                  prev.set('q', val)
+                } else {
+                  prev.delete('q')
+                }
+                return prev
+              })
+            }}
             className="h-10 w-full rounded-lg border border-input bg-background pl-9 pr-3 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring"
           />
         </div>
+
+        <select
+          value={filterCompany}
+          onChange={(e) => setFilterCompany(e.target.value)}
+          className="h-10 rounded-lg border border-input bg-card px-3 text-sm outline-none text-foreground cursor-pointer focus:border-ring focus:ring-2 focus:ring-ring sm:w-48"
+        >
+          {companies.map((c) => (
+            <option key={c} value={c}>
+              {c === 'All' ? 'All Companies' : c}
+            </option>
+          ))}
+        </select>
+
+        <button
+          type="button"
+          onClick={handleExtractExcel}
+          className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-pop hover:opacity-95 cursor-pointer shrink-0"
+        >
+          <Download className="h-4 w-4" /> Extract Excel
+        </button>
+
+        <button
+          type="button"
+          onClick={handleExtractPdf}
+          className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white shadow-pop hover:opacity-95 cursor-pointer shrink-0"
+        >
+          <Download className="h-4 w-4" /> Extract PDF
+        </button>
       </div>
 
       <div className="card-surface overflow-hidden">

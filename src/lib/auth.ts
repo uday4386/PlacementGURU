@@ -6,6 +6,7 @@ export interface AuthSession {
   name: string
   department?: string
   rollNumber?: string
+  academicYear?: string
 }
 
 const STORAGE_KEY = 'placepro-auth'

@@ -5,7 +5,7 @@ export interface GeminiMessage {
   parts: { text: string }[]
 }
 
-const DEFAULT_API_KEY = 'AQ.Ab8RN6KiC2UzRusnMNY7LBBfz8u3d9jrIZtiwDc92LzlY2PZdQ'
+const DEFAULT_API_KEY = import.meta.env.VITE_GEMINI_API_KEY || ''
 
 export function getGeminiApiKey(): string {
   return localStorage.getItem('placepro-gemini-key') || DEFAULT_API_KEY
@@ -53,8 +53,8 @@ export async function sendToGemini(
   // We omit the Authorization header to use the free public tier and bypass CORS credential preflights.
   const systemPrompt = 
     role === 'admin'
-      ? `You are PlacePro AI, a TPO/admin assistant. Help planning recruitment drives, strategic checklists, and admin tasks.`
-      : `You are PlacePro AI, a premium career counselor. Help with resume building, prep, mock interviews, and career counseling.`
+      ? `You are PlaceGO! AI, a TPO/admin assistant. Help planning recruitment drives, strategic checklists, and admin tasks.`
+      : `You are PlaceGO! AI, a premium career counselor. Help with resume building, prep, mock interviews, and career counseling.`
 
   let chatMLPrompt = `<|im_start|>system\n${systemPrompt}<|im_end|>\n`
   for (const m of messages) {

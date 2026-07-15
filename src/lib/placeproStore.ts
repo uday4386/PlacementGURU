@@ -8,6 +8,10 @@ async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Re
   if (token) {
     headers.set('Authorization', `Bearer ${token}`)
   }
+  const selectedYear = localStorage.getItem('placepro-selected-academic-year')
+  if (selectedYear) {
+    headers.set('X-Academic-Year', selectedYear)
+  }
   return fetch(url, { ...options, headers })
 }
 
@@ -38,6 +42,7 @@ export interface MasterStudentRow {
   btechYop: string
   activeBacklogs: string
   noOfBacklogs: string
+  academicYear?: string
 }
 
 export interface FormFieldConfig {
@@ -86,8 +91,11 @@ export interface PlacementForm {
   companyJobType?: string
   companyPkgMin?: string
   companyPkgMax?: string
+  companyMinCgpa?: string
+  companyMaxBacklogs?: string
   companyAcademicYear?: string
   companyRemarks?: string
+  academicYear?: string
 }
 
 export interface FormSubmission {
@@ -98,6 +106,7 @@ export interface FormSubmission {
   submittedAt: string
   status: 'Approved' | 'Pending'
   values: Record<string, string>
+  academicYear?: string
 }
 
 export interface CompanyDrive {
@@ -114,6 +123,8 @@ export interface CompanyDrive {
   jobType: string
   academicYear: string
   remarks?: string
+  minCgpa?: string
+  maxBacklogs?: string
   formId?: string
 }
 
@@ -128,6 +139,7 @@ export interface PlacementOffer {
   type: 'On-campus' | 'Off-campus'
   email?: string
   phone?: string
+  academicYear?: string
 }
 
 export interface UploadHistoryEntry {
@@ -146,6 +158,18 @@ export const COMPANIES_KEY = 'placepro-companies'
 export const PLACEMENTS_KEY = 'placepro-placements'
 export const PLACEMENT_NOTIFICATIONS_KEY = 'placepro-placement-notifications'
 
+function getSelectedAcademicYear() {
+  try {
+    return localStorage.getItem('placepro-selected-academic-year') || '2025-2026'
+  } catch {
+    return '2025-2026'
+  }
+}
+
+function scopedDraftKey(key: string) {
+  return `${key}:${getSelectedAcademicYear()}`
+}
+
 export interface PlacementNotification {
   id: string
   rollNumber: string
@@ -157,6 +181,7 @@ export interface PlacementNotification {
   type: string
   createdAt: string
   read: boolean
+  academicYear?: string
 }
 
 type Listener = () => void
@@ -185,10 +210,16 @@ let cacheSubmissions: FormSubmission[] = []
 let cacheCompanies: CompanyDrive[] = []
 let cachePlacements: PlacementOffer[] = []
 let cacheNotifications: PlacementNotification[] = []
+let cacheMasterHistory: UploadHistoryEntry[] = []
 
 export async function initializeStore() {
+  // Skip if no auth token — user is not logged in yet
+  const token = getAuthToken()
+  if (!token) {
+    return
+  }
   try {
-    const [masterRows, forms, submissions, companies, placements, notifications] = await Promise.all([
+    const [masterRows, forms, submissions, companies, placements, notifications, masterHistory] = await Promise.all([
       fetchWithAuth('/api/master-rows').then(res => {
         if (!res.ok) throw new Error('API fetch failed')
         return res.json()
@@ -212,7 +243,11 @@ export async function initializeStore() {
       fetchWithAuth('/api/placement-notifications').then(res => {
         if (!res.ok) throw new Error('API fetch failed')
         return res.json()
-      })
+      }),
+      fetchWithAuth('/api/master-history').then(res => {
+        if (!res.ok) return []
+        return res.json()
+      }).catch(() => [])
     ])
 
     cacheMasterRows = masterRows
@@ -221,12 +256,13 @@ export async function initializeStore() {
     cacheCompanies = companies
     cachePlacements = placements
     cacheNotifications = notifications
+    cacheMasterHistory = masterHistory
     notifyListeners()
   } catch (err) {
     console.error('Failed to initialize PlacePro store from API, using local storage fallbacks.', err)
-    cacheMasterRows = loadDraft<MasterStudentRow[]>(MASTER_ROWS_KEY) ?? []
+    cacheMasterRows = loadDraft<MasterStudentRow[]>(scopedDraftKey(MASTER_ROWS_KEY)) ?? []
     
-    const loadedForms = loadDraft<PlacementForm[]>(FORMS_KEY)
+    const loadedForms = loadDraft<PlacementForm[]>(scopedDraftKey(FORMS_KEY))
     if (!loadedForms) {
       cacheForms = [
         {
@@ -267,15 +303,16 @@ export async function initializeStore() {
           ]
         }
       ]
-      saveDraft(FORMS_KEY, cacheForms)
+      saveDraft(scopedDraftKey(FORMS_KEY), cacheForms)
     } else {
       cacheForms = loadedForms
     }
 
-    cacheSubmissions = loadDraft<FormSubmission[]>(SUBMISSIONS_KEY) ?? []
-    cacheCompanies = loadDraft<CompanyDrive[]>(COMPANIES_KEY) ?? []
-    cachePlacements = loadDraft<PlacementOffer[]>(PLACEMENTS_KEY) ?? []
-    cacheNotifications = loadDraft<PlacementNotification[]>(PLACEMENT_NOTIFICATIONS_KEY) ?? []
+    cacheSubmissions = loadDraft<FormSubmission[]>(scopedDraftKey(SUBMISSIONS_KEY)) ?? []
+    cacheCompanies = loadDraft<CompanyDrive[]>(scopedDraftKey(COMPANIES_KEY)) ?? []
+    cachePlacements = loadDraft<PlacementOffer[]>(scopedDraftKey(PLACEMENTS_KEY)) ?? []
+    cacheNotifications = loadDraft<PlacementNotification[]>(scopedDraftKey(PLACEMENT_NOTIFICATIONS_KEY)) ?? []
+    cacheMasterHistory = loadDraft<UploadHistoryEntry[]>(scopedDraftKey(MASTER_HISTORY_KEY)) ?? []
     notifyListeners()
   }
 }
@@ -286,7 +323,7 @@ export function loadMasterRows() {
 
 export function saveMasterRows(rows: MasterStudentRow[]) {
   cacheMasterRows = rows
-  saveDraft(MASTER_ROWS_KEY, rows)
+  saveDraft(scopedDraftKey(MASTER_ROWS_KEY), rows)
   notifyListeners()
   fetchWithAuth('/api/master-rows', {
     method: 'POST',
@@ -296,57 +333,143 @@ export function saveMasterRows(rows: MasterStudentRow[]) {
 }
 
 export function loadMasterHistory(): UploadHistoryEntry[] {
-  return loadDraft<UploadHistoryEntry[]>(MASTER_HISTORY_KEY) ?? []
+  return cacheMasterHistory
 }
 
 export function saveMasterHistory(history: UploadHistoryEntry[]) {
-  saveDraft(MASTER_HISTORY_KEY, history)
+  cacheMasterHistory = history
+  saveDraft(scopedDraftKey(MASTER_HISTORY_KEY), history)
   notifyListeners()
+
+  const latestLog = history[0]
+  if (latestLog) {
+    fetchWithAuth('/api/master-history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(latestLog),
+    }).catch((err) => console.error('Failed to save master history to API', err))
+  }
 }
 
 export function loadPlacementForms(): PlacementForm[] {
   return cacheForms
 }
 
-export function savePlacementForms(forms: PlacementForm[]) {
+export async function savePlacementForms(forms: PlacementForm[]) {
   cacheForms = forms
-  saveDraft(FORMS_KEY, forms)
+  saveDraft(scopedDraftKey(FORMS_KEY), forms)
+  loadDeptBroadcasts()
   notifyListeners()
-  fetchWithAuth('/api/placement-forms', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(forms),
-  }).catch((err) => console.error('Failed to save placement forms to API', err))
+  try {
+    const res = await fetchWithAuth('/api/placement-forms', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(forms),
+    })
+    if (res.ok) {
+      try {
+        const [formsRes, notifRes] = await Promise.all([
+          fetchWithAuth('/api/placement-forms'),
+          fetchWithAuth('/api/placement-notifications')
+        ])
+        if (formsRes.ok) {
+          const syncedForms = await formsRes.json()
+          cacheForms = syncedForms
+          saveDraft(scopedDraftKey(FORMS_KEY), syncedForms)
+        }
+        if (notifRes.ok) {
+          const notifs = await notifRes.json()
+          cacheNotifications = notifs
+          saveDraft(scopedDraftKey(PLACEMENT_NOTIFICATIONS_KEY), notifs)
+        }
+        notifyListeners()
+      } catch (e) {
+        console.error('Failed to sync placement forms/notifications after save:', e)
+      }
+    }
+  } catch (err) {
+    console.error('Failed to save placement forms to API', err)
+  }
 }
 
 export function loadFormSubmissions(): FormSubmission[] {
   return cacheSubmissions
 }
 
-export function saveFormSubmissions(submissions: FormSubmission[]) {
+export async function saveFormSubmissions(submissions: FormSubmission[]) {
   cacheSubmissions = submissions
-  saveDraft(SUBMISSIONS_KEY, submissions)
+  saveDraft(scopedDraftKey(SUBMISSIONS_KEY), submissions)
   notifyListeners()
-  fetchWithAuth('/api/form-submissions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(submissions),
-  }).catch((err) => console.error('Failed to save submissions to API', err))
+  try {
+    const res = await fetchWithAuth('/api/form-submissions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(submissions),
+    })
+    if (res.ok) {
+      const fetchRes = await fetchWithAuth('/api/form-submissions')
+      if (fetchRes.ok) {
+        const synced = await fetchRes.json()
+        cacheSubmissions = synced
+        saveDraft(scopedDraftKey(SUBMISSIONS_KEY), synced)
+        notifyListeners()
+      }
+    }
+  } catch (err) {
+    console.error('Failed to save submissions to API', err)
+  }
+}
+
+export async function submitSingleFormSubmission(submission: FormSubmission) {
+  const cleanRoll = submission.roll.trim().toUpperCase();
+  const existingIdx = cacheSubmissions.findIndex(
+    s => s.formId === submission.formId && s.roll.trim().toUpperCase() === cleanRoll
+  );
+  if (existingIdx >= 0) {
+    cacheSubmissions[existingIdx] = submission;
+  } else {
+    cacheSubmissions.push(submission);
+  }
+  saveDraft(scopedDraftKey(SUBMISSIONS_KEY), cacheSubmissions);
+  notifyListeners();
+
+  try {
+    await fetchWithAuth('/api/form-submissions/single', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(submission),
+    });
+  } catch (err) {
+    console.error('Failed to submit single form submission', err);
+  }
 }
 
 export function loadCompanies(): CompanyDrive[] {
   return cacheCompanies
 }
 
-export function saveCompanies(companies: CompanyDrive[]) {
+export async function saveCompanies(companies: CompanyDrive[]) {
   cacheCompanies = companies
-  saveDraft(COMPANIES_KEY, companies)
+  saveDraft(scopedDraftKey(COMPANIES_KEY), companies)
   notifyListeners()
-  fetchWithAuth('/api/companies', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(companies),
-  }).catch((err) => console.error('Failed to save companies to API', err))
+  try {
+    const res = await fetchWithAuth('/api/companies', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(companies),
+    })
+    if (res.ok) {
+      const fetchRes = await fetchWithAuth('/api/companies')
+      if (fetchRes.ok) {
+        const synced = await fetchRes.json()
+        cacheCompanies = synced
+        saveDraft(scopedDraftKey(COMPANIES_KEY), synced)
+        notifyListeners()
+      }
+    }
+  } catch (err) {
+    console.error('Failed to save companies to API', err)
+  }
 }
 
 export function loadPlacements(): PlacementOffer[] {
@@ -355,7 +478,7 @@ export function loadPlacements(): PlacementOffer[] {
 
 export async function savePlacements(placements: PlacementOffer[]) {
   cachePlacements = placements
-  saveDraft(PLACEMENTS_KEY, placements)
+  saveDraft(scopedDraftKey(PLACEMENTS_KEY), placements)
   notifyListeners()
   try {
     const res = await fetchWithAuth('/api/placements', {
@@ -376,15 +499,72 @@ export function loadPlacementNotifications(): PlacementNotification[] {
   return cacheNotifications
 }
 
-export function savePlacementNotifications(notifications: PlacementNotification[]) {
+export function loadDeptBroadcasts(): any[] {
+  try {
+    const raw = localStorage.getItem('placepro-broadcasts')
+    let broadcasts: any[] = raw ? JSON.parse(raw) : []
+
+    const forms = cacheForms.length > 0 ? cacheForms : (loadDraft<PlacementForm[]>(scopedDraftKey(FORMS_KEY)) ?? [])
+    let updated = false
+    forms.forEach((form) => {
+      if (form.status === 'Active' && (!form.hasCompanyDrive || form.type === 'Survey' || form.name.toLowerCase().includes('survey'))) {
+        const notifId = `FORM-NOTIF-${form.id}`
+        if (!broadcasts.some((b) => b.id === notifId)) {
+          broadcasts.unshift({
+            id: notifId,
+            title: `SURVEY FORM: ${form.name}`,
+            message: `A new survey / general form "${form.name}" (${form.type || 'Survey'}) has been published. Please complete and submit your response before the deadline (${form.endDate || '2026-07-31'}).`,
+            type: 'announcement',
+            branch: 'All',
+            sender: 'Placement Cell',
+            createdAt: form.created || new Date().toISOString(),
+            formId: form.id,
+          })
+          updated = true
+        }
+      }
+    })
+    if (updated && typeof localStorage !== 'undefined') {
+      localStorage.setItem('placepro-broadcasts', JSON.stringify(broadcasts))
+    }
+    return broadcasts
+  } catch {
+    return []
+  }
+}
+
+export async function syncPlacementNotifications(): Promise<PlacementNotification[]> {
+  try {
+    const res = await fetchWithAuth('/api/placement-notifications')
+    if (res.ok) {
+      const notifs = await res.json()
+      cacheNotifications = notifs
+      saveDraft(scopedDraftKey(PLACEMENT_NOTIFICATIONS_KEY), notifs)
+      notifyListeners()
+      return notifs
+    }
+  } catch (err) {
+    console.error('Failed to sync placement notifications from API:', err)
+  }
+  return cacheNotifications
+}
+
+export async function savePlacementNotifications(notifications: PlacementNotification[]) {
   cacheNotifications = notifications
-  saveDraft(PLACEMENT_NOTIFICATIONS_KEY, notifications)
+  saveDraft(scopedDraftKey(PLACEMENT_NOTIFICATIONS_KEY), notifications)
   notifyListeners()
-  fetchWithAuth('/api/placement-notifications', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(notifications),
-  }).catch((err) => console.error('Failed to save notifications to API', err))
+  try {
+    const res = await fetchWithAuth('/api/placement-notifications', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(notifications),
+    })
+    if (res.ok) {
+      await syncPlacementNotifications()
+    }
+  } catch (err) {
+    console.error('Failed to save notifications to API', err)
+  }
 }
 
 export function addPlacementNotification(offer: PlacementOffer) {
@@ -426,13 +606,13 @@ export async function wipeAllData() {
   cacheNotifications = []
 
   // Clear local storage drafts
-  saveDraft(MASTER_ROWS_KEY, [])
-  saveDraft(MASTER_HISTORY_KEY, [])
-  saveDraft(FORMS_KEY, [])
-  saveDraft(SUBMISSIONS_KEY, [])
-  saveDraft(COMPANIES_KEY, [])
-  saveDraft(PLACEMENTS_KEY, [])
-  saveDraft(PLACEMENT_NOTIFICATIONS_KEY, [])
+  saveDraft(scopedDraftKey(MASTER_ROWS_KEY), [])
+  saveDraft(scopedDraftKey(MASTER_HISTORY_KEY), [])
+  saveDraft(scopedDraftKey(FORMS_KEY), [])
+  saveDraft(scopedDraftKey(SUBMISSIONS_KEY), [])
+  saveDraft(scopedDraftKey(COMPANIES_KEY), [])
+  saveDraft(scopedDraftKey(PLACEMENTS_KEY), [])
+  saveDraft(scopedDraftKey(PLACEMENT_NOTIFICATIONS_KEY), [])
 
   // Sync empty arrays to server
   await Promise.all([

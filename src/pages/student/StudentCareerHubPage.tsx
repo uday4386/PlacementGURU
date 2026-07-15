@@ -1,10 +1,12 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   Search, ChevronRight, ChevronLeft, Lock, CheckCircle2, Circle, Play,
   Download, ExternalLink, BookOpen, Youtube, Globe, Lightbulb, Code2,
   Sparkles, Clock, RotateCcw, GraduationCap, Eye, ZoomIn, ZoomOut,
   Maximize2, Minimize2, X, ArrowRight, Trophy, Star, Brain, Rocket, Grid
 } from 'lucide-react'
+import { getAuthToken } from '../../lib/auth'
 import {
   careerRoles,
   getNextRecommendedSkill, estimateCompletionTime, getRevisionTopics, getUnlockedProjects
@@ -851,7 +853,14 @@ function SkillDetailPanel({ skill, role, isCompleted, isLocked, onComplete, onCl
           </div>
           <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
             <button 
-              onClick={onComplete}
+              onClick={() => {
+                if (!isCompleted) {
+                  setCheckedItems(allItems)
+                } else {
+                  setCheckedItems([])
+                }
+                onComplete()
+              }}
               disabled={isLocked}
               className={`w-full sm:w-auto px-4 py-2 text-sm font-bold rounded-xl border transition cursor-pointer flex items-center justify-center gap-2 ${
                 isLocked
@@ -882,8 +891,33 @@ export function StudentCareerHubPage() {
   const [view, setView] = useState<View>('roles')
   const [selectedRoleId, setSelectedRoleId] = useState<string | null>(loadSelectedRole)
   const [progress, setProgress] = useState<Record<string, string[]>>(loadProgress)
+
+  useEffect(() => {
+    async function fetchDbProgress() {
+      const token = getAuthToken()
+      if (!token) return
+      try {
+        const res = await fetch('/api/career/progress', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        })
+        if (res.ok) {
+          const data = await res.json()
+          if (data && typeof data === 'object') {
+            setProgress(data)
+            localStorage.setItem('career_hub_progress', JSON.stringify(data))
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch career progress from DB:', err)
+      }
+    }
+    fetchDbProgress()
+  }, [])
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null)
-  const [search, setSearch] = useState('')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const search = searchParams.get('q') || ''
   const [showPdfPreview, setShowPdfPreview] = useState(false)
   const [projectFilter, setProjectFilter] = useState<'all' | 'beginner' | 'intermediate' | 'advanced'>('all')
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('flowchart')
@@ -1040,15 +1074,36 @@ export function StudentCareerHubPage() {
     setSelectedSkillId(null)
   }
 
-  function toggleSkillComplete(skillId: string) {
+  async function toggleSkillComplete(skillId: string) {
+    const roleId = selectedRoleId!
+    const current = progress[roleId] ?? []
+    const isCompleted = current.includes(skillId)
+    const next = isCompleted ? current.filter(s => s !== skillId) : [...current, skillId]
+    
     setProgress(prev => {
-      const roleId = selectedRoleId!
-      const current = prev[roleId] ?? []
-      const next = current.includes(skillId) ? current.filter(s => s !== skillId) : [...current, skillId]
       const updated = { ...prev, [roleId]: next }
       saveProgress(updated)
       return updated
     })
+
+    const token = getAuthToken()
+    if (!token) return
+    try {
+      await fetch('/api/career/progress', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          roadmapId: roleId,
+          skillId: skillId,
+          completed: !isCompleted
+        })
+      })
+    } catch (err) {
+      console.error('Failed to sync career progress to DB:', err)
+    }
   }
 
   function isSkillLocked(_skill: SkillNode): boolean {
@@ -1145,7 +1200,17 @@ export function StudentCareerHubPage() {
             type="text"
             placeholder="Search career paths..."
             value={search}
-            onChange={e => setSearch(e.target.value)}
+            onChange={(e) => {
+              const val = e.target.value
+              setSearchParams((prev) => {
+                if (val) {
+                  prev.set('q', val)
+                } else {
+                  prev.delete('q')
+                }
+                return prev
+              })
+            }}
             className="w-full rounded-2xl border-2 border-border/60 bg-card pl-12 pr-5 py-3.5 text-sm font-medium text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-4 focus:ring-primary/15 focus:border-primary/40 shadow-sm transition-all"
           />
         </div>
@@ -1230,7 +1295,7 @@ export function StudentCareerHubPage() {
       {/* Header */}
       <div className="mb-8">
         <button
-          onClick={() => { setView('roles'); setSelectedSkillId(null); setSearch('') }}
+          onClick={() => { setView('roles'); setSelectedSkillId(null) }}
           className="inline-flex items-center gap-1.5 text-xs font-semibold text-muted-foreground hover:text-primary mb-4 transition cursor-pointer group"
         >
           <ChevronLeft className="h-4 w-4 group-hover:-translate-x-0.5 transition-transform" /> All Career Paths
@@ -1334,7 +1399,17 @@ export function StudentCareerHubPage() {
           type="text"
           placeholder="Search skills..."
           value={search}
-          onChange={e => setSearch(e.target.value)}
+          onChange={(e) => {
+            const val = e.target.value
+            setSearchParams((prev) => {
+              if (val) {
+                prev.set('q', val)
+              } else {
+                prev.delete('q')
+              }
+              return prev
+            })
+          }}
           className="w-full rounded-2xl border-2 border-border/60 bg-card pl-12 pr-5 py-3 text-sm font-medium text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-4 focus:ring-primary/15 focus:border-primary/40 shadow-sm transition-all"
         />
       </div>

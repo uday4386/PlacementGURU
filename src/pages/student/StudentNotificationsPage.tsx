@@ -1,11 +1,15 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Bell, Check, MailOpen, Award, Sparkles } from 'lucide-react'
-import { studentNotifications } from '../../data/platformData'
 import { getAuthSession } from '../../lib/auth'
 import {
   loadPlacementNotifications,
   savePlacementNotifications,
+  syncPlacementNotifications,
+  loadPlacementForms,
+  loadCompanies,
   loadMasterRows,
+  loadDeptBroadcasts,
   useStoreState,
   type PlacementNotification,
 } from '../../lib/placeproStore'
@@ -34,35 +38,30 @@ export function StudentNotificationsPage() {
   const session = getAuthSession()
   const rollNumber = session?.rollNumber?.trim().toUpperCase() || ''
 
-  // Local state for static notifications
-  const [staticNotifs, setStaticNotifs] = useState(studentNotifications)
+  useEffect(() => {
+    syncPlacementNotifications()
+  }, [])
 
-  // Local state for placement notifications
-  const [placementNotifs, setPlacementNotifs] = useState<PlacementNotification[]>(() => {
-    const all = loadPlacementNotifications()
-    return all.filter((n) => n.rollNumber === rollNumber)
-  })
+  const liveNotifs = useStoreState(loadPlacementNotifications) ?? []
+  const placementNotifs = useMemo(() => {
+    return liveNotifs.filter((n) => {
+      const targetRoll = (n.rollNumber || '').trim().toUpperCase()
+      return !targetRoll || targetRoll === 'ALL' || targetRoll === rollNumber
+    })
+  }, [liveNotifs, rollNumber])
 
   const masterRows = useStoreState(loadMasterRows) ?? []
   
   // Find current student's branch
   const studentBranch = useMemo(() => {
     const studentProfile = masterRows.find(
-      (s) => s.rollNumber.trim().toUpperCase() === rollNumber
+      (s) => (s.rollNumber || '').trim().toUpperCase() === rollNumber
     )
     return studentProfile?.branch || ''
   }, [masterRows, rollNumber])
 
-  // Local state for department broadcasts
-  const [broadcasts] = useState<any[]>(() => {
-    const raw = localStorage.getItem('placepro-broadcasts')
-    if (!raw) return []
-    try {
-      return JSON.parse(raw) as any[]
-    } catch {
-      return []
-    }
-  })
+  // State for department broadcasts
+  const broadcasts = useStoreState(loadDeptBroadcasts) ?? []
 
   // Read broadcasts state
   const [readBroadcastIds, setReadBroadcastIds] = useState<string[]>(() => {
@@ -80,13 +79,14 @@ export function StudentNotificationsPage() {
     return broadcasts.filter((b) => matchesBranch(studentBranch, b.branch))
   }, [broadcasts, studentBranch])
 
-  function toggleBroadcastRead(id: string) {
+  function _toggleBroadcastRead(id: string) {
     const updated = readBroadcastIds.includes(id)
       ? readBroadcastIds.filter((x) => x !== id)
       : [...readBroadcastIds, id]
     localStorage.setItem('placepro-read-broadcasts', JSON.stringify(updated))
     setReadBroadcastIds(updated)
   }
+  void _toggleBroadcastRead
 
 
   // Helper to persist read status changes
@@ -94,21 +94,15 @@ export function StudentNotificationsPage() {
     const all = loadPlacementNotifications()
     const updated = all.map((n) => (n.id === id ? { ...n, read: !n.read } : n))
     savePlacementNotifications(updated)
-    setPlacementNotifs(updated.filter((n) => n.rollNumber === rollNumber))
-  }
-
-  function toggleStaticRead(id: number) {
-    setStaticNotifs((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, read: !n.read } : n))
-    )
   }
 
   function markAllRead() {
-    setStaticNotifs((prev) => prev.map((n) => ({ ...n, read: true })))
     const all = loadPlacementNotifications()
-    const updated = all.map((n) => (n.rollNumber === rollNumber ? { ...n, read: true } : n))
+    const updated = all.map((n) => {
+      const targetRoll = (n.rollNumber || '').trim().toUpperCase()
+      return !targetRoll || targetRoll === 'ALL' || targetRoll === rollNumber ? { ...n, read: true } : n
+    })
     savePlacementNotifications(updated)
-    setPlacementNotifs(updated.filter((n) => n.rollNumber === rollNumber))
     
     // Mark all broadcasts as read
     const allBroadcastIds = deptBroadcasts.map((b) => b.id)
@@ -116,52 +110,122 @@ export function StudentNotificationsPage() {
     setReadBroadcastIds(allBroadcastIds)
   }
 
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      markAllRead()
+    }, 600)
+    return () => clearTimeout(timer)
+  }, [placementNotifs.length, deptBroadcasts.length])
+
   const unreadCount =
-    staticNotifs.filter((n) => !n.read).length +
     placementNotifs.filter((n) => !n.read).length +
     deptBroadcasts.filter((b) => !readBroadcastIds.includes(b.id)).length
 
   // Merge notifications for display
   const displayList = useMemo(() => {
-    const mappedPlacement = placementNotifs.map((n) => ({
-      id: n.id,
-      title: `🎉 Congratulations! Selected at ${n.company}`,
-      desc: `You have been selected as ${n.role} with package ${n.package} (${n.type})!`,
-      time: formatTime(n.createdAt),
-      category: 'Placement Selection',
-      read: n.read,
-      isPlacement: true,
-      isBroadcast: false,
-      original: n,
-    }))
-
-    const mappedStatic = staticNotifs.map((n) => ({
-      id: String(n.id),
-      title: n.title,
-      desc: n.desc,
-      time: n.time,
-      category: n.category,
-      read: n.read,
-      isPlacement: false,
-      isBroadcast: false,
-      original: null,
-    }))
+    const mappedPlacement = placementNotifs.map((n) => {
+      const typeStr = n.type || ''
+      const isCustomBroadcast = ['info', 'warning', 'success', 'announcement', 'Broadcast'].includes(typeStr) || !typeStr
+      return {
+        id: n.id,
+        title: isCustomBroadcast ? (n.company || 'Announcement') : `🎉 Congratulations! Selected at ${n.company || 'Company'}`,
+        desc: isCustomBroadcast ? (n.role || '') : `You have been selected as ${n.role || 'candidate'} with package ${n.package || 'N/A'} (${typeStr})!`,
+        time: formatTime(n.createdAt || new Date().toISOString()),
+        category: isCustomBroadcast ? (typeStr ? typeStr.toUpperCase() : 'INFO') : 'Placement Selection',
+        read: n.read,
+        isPlacement: !isCustomBroadcast,
+        isBroadcast: isCustomBroadcast,
+        original: n,
+      }
+    })
 
     const mappedBroadcasts = deptBroadcasts.map((b) => ({
       id: b.id,
-      title: b.title,
-      desc: b.message,
-      time: formatTime(b.createdAt),
-      category: `${b.sender} (${getShortBranchName(b.branch)})`,
+      title: b.title || 'Department Notice',
+      desc: b.message || (b as any).desc || '',
+      time: formatTime(b.createdAt || new Date().toISOString()),
+      category: `${b.sender || 'Placement Cell'} (${getShortBranchName(b.branch || '')})`,
       read: readBroadcastIds.includes(b.id),
       isPlacement: false,
       isBroadcast: true,
       original: b,
     }))
 
-    // Show placement selections first, then broadcasts, then static
-    return [...mappedPlacement, ...mappedBroadcasts, ...mappedStatic]
-  }, [placementNotifs, staticNotifs, deptBroadcasts, readBroadcastIds])
+    // Show placement selections first, then broadcasts, deduplicated by title + desc
+    const allItems = [...mappedPlacement, ...mappedBroadcasts];
+    const seen = new Set();
+    return allItems.filter((item) => {
+      const titleStr = (item.title || '').trim().toUpperCase();
+      const descStr = (item.desc || '').trim().toUpperCase();
+      const key = `${titleStr}::${descStr}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [placementNotifs, deptBroadcasts, readBroadcastIds])
+
+  const navigate = useNavigate()
+
+  function handleNotificationClick(notif: typeof displayList[0]) {
+    if (!notif.read && !notif.isBroadcast) {
+      togglePlacementRead(notif.id)
+    }
+
+    const forms = loadPlacementForms()
+    const companies = loadCompanies()
+
+    if (notif.isPlacement) {
+      const matchComp = companies.find((c) => c.name.toLowerCase() === notif.title.toLowerCase() || notif.title.toLowerCase().includes(c.name.toLowerCase()))
+      if (matchComp) {
+        navigate(`/student/drives?company=${encodeURIComponent(matchComp.name)}`)
+      } else {
+        navigate(`/student/drives?q=${encodeURIComponent(notif.title)}`)
+      }
+      return
+    }
+
+    if (notif.isBroadcast) {
+      const orig = notif.original as any
+      if (orig?.formId) {
+        navigate(`/student/drives?formId=${encodeURIComponent(orig.formId)}&action=apply`)
+        return
+      }
+      const matchForm = forms.find((f) => notif.title.toLowerCase().includes(f.name.toLowerCase()) || (orig?.title && orig.title.toLowerCase().includes(f.name.toLowerCase())))
+      if (matchForm) {
+        navigate(`/student/drives?formId=${encodeURIComponent(matchForm.id)}&action=apply`)
+        return
+      }
+      const matchComp = companies.find((c) => notif.title.toLowerCase().includes(c.name.toLowerCase()) || notif.desc.toLowerCase().includes(c.name.toLowerCase()))
+      if (matchComp) {
+        navigate(`/student/drives?company=${encodeURIComponent(matchComp.name)}`)
+      }
+      return
+    }
+
+    const orig = notif.original as PlacementNotification
+    const matchForm = forms.find((f) =>
+      (orig?.package && f.id === orig.package) ||
+      (orig?.company && f.name.trim().toLowerCase() === orig.company.trim().toLowerCase()) ||
+      f.name.trim().toLowerCase() === notif.title.trim().toLowerCase()
+    )
+
+    if (matchForm) {
+      navigate(`/student/drives?formId=${encodeURIComponent(matchForm.id)}&action=apply`)
+      return
+    }
+
+    const matchComp = companies.find((c) =>
+      (orig?.company && c.name.toLowerCase() === orig.company.toLowerCase()) ||
+      notif.title.toLowerCase().includes(c.name.toLowerCase())
+    )
+
+    if (matchComp) {
+      navigate(`/student/drives?company=${encodeURIComponent(matchComp.name)}`)
+      return
+    }
+
+    navigate(`/student/drives?q=${encodeURIComponent(notif.title)}`)
+  }
 
   return (
     <>
@@ -189,7 +253,8 @@ export function StudentNotificationsPage() {
           return (
             <div
               key={notif.id}
-              className={`flex gap-4 p-5 transition hover:bg-muted/30 relative ${
+              onClick={() => handleNotificationClick(notif)}
+              className={`flex gap-4 p-5 transition hover:bg-muted/30 relative cursor-pointer ${
                 isPlacement && !notif.read
                   ? 'bg-success/5 border-l-4 border-success'
                   : !isPlacement && !notif.read
@@ -248,14 +313,9 @@ export function StudentNotificationsPage() {
                   </span>
                   <button
                     type="button"
-                    onClick={() => {
-                      if (isPlacement) {
-                        togglePlacementRead(notif.id)
-                      } else if (notif.isBroadcast) {
-                        toggleBroadcastRead(notif.id)
-                      } else {
-                        toggleStaticRead(Number(notif.id))
-                      }
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      togglePlacementRead(notif.id)
                     }}
                     className={`text-xs font-semibold hover:underline cursor-pointer ${
                       isPlacement ? 'text-success' : 'text-primary'

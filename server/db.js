@@ -154,6 +154,8 @@ export async function setupDatabase() {
           company_job_type VARCHAR(50),
           company_pkg_min VARCHAR(50),
           company_pkg_max VARCHAR(50),
+          company_min_cgpa VARCHAR(50),
+          company_max_backlogs VARCHAR(50),
           company_academic_year VARCHAR(50),
           company_remarks TEXT
         );
@@ -276,6 +278,51 @@ export async function setupDatabase() {
           mini_projects JSONB DEFAULT '[]'
         );
       `);
+
+      // 11. User Push Tokens table (for mobile app push notifications)
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS user_push_tokens (
+          roll_number VARCHAR(50) PRIMARY KEY,
+          push_token TEXT NOT NULL,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+
+      // 12. Academic Years table
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS academic_years (
+          academic_year VARCHAR(50) PRIMARY KEY,
+          start_date VARCHAR(50),
+          end_date VARCHAR(50),
+          status VARCHAR(20),
+          is_default BOOLEAN DEFAULT false,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+
+      // 13. Master History table
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS master_history (
+          id SERIAL PRIMARY KEY,
+          file_name VARCHAR(255),
+          upload_date VARCHAR(100),
+          records_count INTEGER,
+          uploaded_by VARCHAR(150),
+          rows JSONB,
+          academic_year VARCHAR(50)
+        );
+      `);
+
+      // Ensure academic_year column exists on all relevant tables
+      const tablesWithAcademicYear = [
+        'master_students', 'placement_forms', 'form_submissions',
+        'companies', 'placements', 'placement_notifications', 'master_history'
+      ];
+      for (const t of tablesWithAcademicYear) {
+        await client.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS academic_year VARCHAR(50);`).catch(() => {});
+      }
+      await client.query(`ALTER TABLE placement_forms ADD COLUMN IF NOT EXISTS company_min_cgpa VARCHAR(50);`).catch(() => {});
+      await client.query(`ALTER TABLE placement_forms ADD COLUMN IF NOT EXISTS company_max_backlogs VARCHAR(50);`).catch(() => {});
 
       // Seed default career roadmaps
       const roadmapsRes = await client.query('SELECT COUNT(*) FROM career_roadmaps');
@@ -635,6 +682,13 @@ function runMockQuery(text, params) {
     return { rows };
   }
 
+  if (queryLower === "select username, name from users where role = 'coordinator'") {
+    const rows = db.users
+      .filter(u => u.role === 'coordinator')
+      .map(u => ({ username: u.username, name: u.name }));
+    return { rows };
+  }
+
   if (queryLower.startsWith('select * from master_students where upper(roll_number) = upper($1) or lower(mail_id) = lower($1)')) {
     const val = (params[0] || '').trim();
     const rows = db.master_students.filter(s => 
@@ -647,52 +701,135 @@ function runMockQuery(text, params) {
   if (queryLower === 'select * from master_students') {
     return { rows: db.master_students };
   }
+  if (queryLower.startsWith('select * from master_students where academic_year = $1')) {
+    return { rows: db.master_students.filter(r => r.academic_year === params[0]) };
+  }
+  if (queryLower.startsWith('select distinct roll_number, full_name, first_name, last_name from master_students where academic_year = $1')) {
+    const students = db.master_students.filter(r => r.academic_year === params[0]);
+    const unique = [];
+    const seen = new Set();
+    for (const s of students) {
+      if (!seen.has(s.roll_number)) {
+        seen.add(s.roll_number);
+        unique.push({ roll_number: s.roll_number, full_name: s.full_name, first_name: s.first_name, last_name: s.last_name });
+      }
+    }
+    return { rows: unique };
+  }
+  
   if (queryLower === 'select * from placement_forms') {
     return { rows: db.placement_forms };
   }
+  if (queryLower.startsWith('select * from placement_forms where academic_year = $1')) {
+    return { rows: db.placement_forms.filter(r => r.academic_year === params[0]) };
+  }
+  if (queryLower.startsWith('select id, status from placement_forms where academic_year = $1')) {
+    return { 
+      rows: db.placement_forms
+        .filter(r => r.academic_year === params[0])
+        .map(r => ({ id: r.id, status: r.status }))
+    };
+  }
+
   if (queryLower === 'select * from form_submissions') {
     return { rows: db.form_submissions };
   }
+  if (queryLower.startsWith('select * from form_submissions where academic_year = $1')) {
+    return { rows: db.form_submissions.filter(r => r.academic_year === params[0]) };
+  }
+
   if (queryLower === 'select * from companies') {
     return { rows: db.companies };
   }
+  if (queryLower.startsWith('select * from companies where academic_year = $1')) {
+    return { rows: db.companies.filter(r => r.academic_year === params[0]) };
+  }
+
   if (queryLower === 'select * from placements') {
     return { rows: db.placements };
   }
+  if (queryLower.startsWith('select * from placements where academic_year = $1')) {
+    return { rows: db.placements.filter(r => r.academic_year === params[0]) };
+  }
+
   if (queryLower === 'select * from placement_notifications') {
     return { rows: db.placement_notifications };
   }
+  if (queryLower.startsWith('select * from placement_notifications where academic_year = $1')) {
+    return { rows: db.placement_notifications.filter(r => r.academic_year === params[0]) };
+  }
+  if (queryLower.startsWith('select id from placement_notifications where academic_year = $1 and package = $2 limit 1')) {
+    const row = db.placement_notifications.find(r => r.academic_year === params[0] && r.package === params[1]);
+    return { rows: row ? [{ id: row.id }] : [] };
+  }
+
 
   if (queryLower === 'delete from master_students') {
     db.master_students = [];
     saveDb();
     return { rows: [] };
   }
+  if (queryLower.startsWith('delete from master_students where academic_year = $1')) {
+    db.master_students = db.master_students.filter(r => r.academic_year !== params[0]);
+    saveDb();
+    return { rows: [] };
+  }
+
   if (queryLower === 'delete from companies') {
     db.companies = [];
     saveDb();
     return { rows: [] };
   }
+  if (queryLower.startsWith('delete from companies where academic_year = $1')) {
+    db.companies = db.companies.filter(r => r.academic_year !== params[0]);
+    saveDb();
+    return { rows: [] };
+  }
+
   if (queryLower === 'delete from placements') {
     db.placements = [];
     saveDb();
     return { rows: [] };
   }
+  if (queryLower.startsWith('delete from placements where academic_year = $1')) {
+    db.placements = db.placements.filter(r => r.academic_year !== params[0]);
+    saveDb();
+    return { rows: [] };
+  }
+
   if (queryLower === 'delete from placement_forms') {
     db.placement_forms = [];
     saveDb();
     return { rows: [] };
   }
+  if (queryLower.startsWith('delete from placement_forms where academic_year = $1')) {
+    db.placement_forms = db.placement_forms.filter(r => r.academic_year !== params[0]);
+    saveDb();
+    return { rows: [] };
+  }
+
   if (queryLower === 'delete from form_submissions') {
     db.form_submissions = [];
     saveDb();
     return { rows: [] };
   }
+  if (queryLower.startsWith('delete from form_submissions where academic_year = $1')) {
+    db.form_submissions = db.form_submissions.filter(r => r.academic_year !== params[0]);
+    saveDb();
+    return { rows: [] };
+  }
+
   if (queryLower === 'delete from placement_notifications') {
     db.placement_notifications = [];
     saveDb();
     return { rows: [] };
   }
+  if (queryLower.startsWith('delete from placement_notifications where academic_year = $1')) {
+    db.placement_notifications = db.placement_notifications.filter(r => r.academic_year !== params[0]);
+    saveDb();
+    return { rows: [] };
+  }
+
 
   if (queryLower.startsWith('insert into career_roadmaps')) {
     const row = {
@@ -772,8 +909,8 @@ function runMockQuery(text, params) {
       status: params[8],
       mode: params[9],
       job_type: params[10],
-      academic_year: params[11],
-      remarks: params[12]
+      remarks: params[11],
+      academic_year: params[12]
     };
     db.companies.push(row);
     saveDb();
@@ -792,7 +929,8 @@ function runMockQuery(text, params) {
       date: params[6],
       type: params[7],
       email: params[8],
-      phone: params[9]
+      phone: params[9],
+      academic_year: params[10]
     };
     db.placements.push(row);
     saveDb();
@@ -811,7 +949,7 @@ function runMockQuery(text, params) {
       end_date: params[7],
       end_time: params[8],
       total: params[9],
-      fields: JSON.parse(params[10]),
+      fields: typeof params[10] === 'string' ? JSON.parse(params[10]) : params[10],
       has_company_drive: params[11],
       company_name: params[12],
       company_sector: params[13],
@@ -821,12 +959,43 @@ function runMockQuery(text, params) {
       company_job_type: params[17],
       company_pkg_min: params[18],
       company_pkg_max: params[19],
-      company_academic_year: params[20],
-      company_remarks: params[21]
+      company_min_cgpa: params[20],
+      company_max_backlogs: params[21],
+      company_academic_year: params[22],
+      company_remarks: params[23],
+      academic_year: params[24] || '2025-2026'
     };
-    db.placement_forms.push(row);
+    const idx = db.placement_forms.findIndex(r => r.id === row.id);
+    if (idx >= 0) {
+      db.placement_forms[idx] = row;
+    } else {
+      db.placement_forms.push(row);
+    }
     saveDb();
     return { rows: [] };
+  }
+
+  if (queryLower.startsWith('select * from form_submissions where form_id = $1 and upper(roll) = $2')) {
+    const rows = (db.form_submissions || []).filter(s => 
+      String(s.form_id || s.formId || '').trim() === String(params[0] || '').trim() &&
+      String(s.roll || '').trim().toUpperCase() === String(params[1] || '').trim().toUpperCase()
+    );
+    return { rows };
+  }
+
+  if (queryLower.startsWith('update form_submissions set name = $1, submitted_at = $2, status = $3, values = $4 where form_id = $5 and upper(roll) = $6')) {
+    const row = (db.form_submissions || []).find(s => 
+      String(s.form_id || s.formId || '').trim() === String(params[4] || '').trim() &&
+      String(s.roll || '').trim().toUpperCase() === String(params[5] || '').trim().toUpperCase()
+    );
+    if (row) {
+      row.name = params[0];
+      row.submitted_at = params[1];
+      row.status = params[2];
+      row.values = typeof params[3] === 'string' ? JSON.parse(params[3]) : params[3];
+      saveDb();
+    }
+    return { rows: row ? [row] : [] };
   }
 
   if (queryLower.startsWith('insert into form_submissions')) {
@@ -837,9 +1006,16 @@ function runMockQuery(text, params) {
       name: params[3],
       submitted_at: params[4],
       status: params[5],
-      values: JSON.parse(params[6])
+      values: typeof params[6] === 'string' ? JSON.parse(params[6]) : params[6],
+      academic_year: params[7] || '2025-2026'
     };
-    db.form_submissions.push(row);
+    if (!db.form_submissions) db.form_submissions = [];
+    const idx = db.form_submissions.findIndex(s => s.form_id === row.form_id && String(s.roll).trim().toUpperCase() === String(row.roll).trim().toUpperCase());
+    if (idx >= 0) {
+      db.form_submissions[idx] = row;
+    } else {
+      db.form_submissions.push(row);
+    }
     saveDb();
     return { rows: [] };
   }
@@ -855,9 +1031,15 @@ function runMockQuery(text, params) {
       date: params[6],
       type: params[7],
       created_at: params[8],
-      read: params[9]
+      read: params[9],
+      academic_year: params[10] || '2025-2026'
     };
-    db.placement_notifications.push(row);
+    const idx = db.placement_notifications.findIndex(r => r.id === row.id);
+    if (idx >= 0) {
+      db.placement_notifications[idx] = row;
+    } else {
+      db.placement_notifications.push(row);
+    }
     saveDb();
     return { rows: [] };
   }

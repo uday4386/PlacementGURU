@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { GraduationCap } from 'lucide-react'
+
 import {
   clearAuthSession,
   getPortalPath,
@@ -32,8 +32,19 @@ export function LoginPage() {
   const [password, setPassword] = useState('')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
+  // 2FA states
+  const [loginStep, setLoginStep] = useState<'password' | 'setup-2fa' | 'verify-2fa'>('password')
+  const [tempToken, setTempToken] = useState<string | null>(null)
+  const [totpSecret, setTotpSecret] = useState<string | null>(null)
+  const [qrCodeData, setQrCodeData] = useState<string | null>(null)
+  const [otpCode, setOtpCode] = useState('')
+  const [securityQuestion, setSecurityQuestion] = useState('What is your favorite food?')
+  const [securityAnswer, setSecurityAnswer] = useState('')
+  
   // Forgot password states
   const [isForgotPassword, setIsForgotPassword] = useState(false)
+  const [forgotPasswordStep, setForgotPasswordStep] = useState<1 | 2>(1)
+  const [fetchedSecurityQuestion, setFetchedSecurityQuestion] = useState<string | null>(null)
   const [resetRoll, setResetRoll] = useState('')
   const [resetEmail, setResetEmail] = useState('')
   const [resetDob, setResetDob] = useState('')
@@ -68,22 +79,14 @@ export function LoginPage() {
 
   // Sync login inputs when selected role changes
   useEffect(() => {
-    if (selectedRole === 'student') {
-      setUsername('')
-      setPassword('')
-    } else if (selectedRole === 'admin') {
-      setUsername(roleDefaults.admin.email)
-      setPassword('admin123')
-    } else if (selectedRole === 'coordinator') {
-      setUsername(roleDefaults.coordinator.email)
-      setPassword('coordinator123')
-    }
+    setUsername('')
+    setPassword('')
     setErrorMsg(null)
   }, [selectedRole])
 
   async function handleSignIn() {
     setErrorMsg(null)
-    const emailToUse = selectedRole === 'student' ? username : roleDefaults[selectedRole].email
+    const emailToUse = username
     const passwordToUse = password
 
     if (!emailToUse || !passwordToUse) {
@@ -109,6 +112,32 @@ export function LoginPage() {
         return
       }
 
+      if (data.requireSetup) {
+        setTempToken(data.token)
+        const setupRes = await fetch('/api/auth/setup-2fa', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${data.token}` }
+        })
+        const setupData = await setupRes.json()
+        if (setupData.success) {
+          setTotpSecret(setupData.secret)
+          setQrCodeData(setupData.qrCodeImage)
+          setLoginStep('setup-2fa')
+        } else {
+          setErrorMsg(setupData.error || 'Failed to setup 2FA.')
+        }
+        return
+      }
+
+      if (data.require2FA) {
+        setTempToken(data.token)
+        setLoginStep('verify-2fa')
+        return
+      }
+
+      if (data.session?.academicYear) {
+        localStorage.setItem('placepro-selected-academic-year', data.session.academicYear)
+      }
       setAuthSession(data.session, data.token)
       
       // Load and cache all database rows using the newly acquired JWT
@@ -117,6 +146,49 @@ export function LoginPage() {
       navigate(getPortalPath(selectedRole), { replace: true })
     } catch (err: any) {
       setErrorMsg(err.message || 'An error occurred during authentication.')
+    }
+  }
+
+  async function handleVerify2FA(isSetup: boolean) {
+    setErrorMsg(null)
+    if (!otpCode || otpCode.length !== 6) {
+      setErrorMsg('Please enter a valid 6-digit code.')
+      return
+    }
+    
+    try {
+      const endpoint = isSetup ? '/api/auth/enable-2fa' : '/api/auth/verify-login-2fa'
+      
+      if (isSetup && (!securityQuestion || !securityAnswer.trim())) {
+        setErrorMsg('Please select a security question and provide an answer.')
+        return
+      }
+      
+      const body = isSetup ? { code: otpCode, secret: totpSecret, securityQuestion, securityAnswer } : { code: otpCode }
+      
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${tempToken}`
+        },
+        body: JSON.stringify(body)
+      })
+      
+      const data = await res.json()
+      if (!res.ok || !data.success) {
+        setErrorMsg(data.error || 'Invalid verification code.')
+        return
+      }
+
+      if (data.session?.academicYear) {
+        localStorage.setItem('placepro-selected-academic-year', data.session.academicYear)
+      }
+      setAuthSession(data.session, data.token)
+      await initializeStore()
+      navigate(getPortalPath(selectedRole), { replace: true })
+    } catch (err: any) {
+      setErrorMsg(err.message || 'An error occurred during verification.')
     }
   }
 
@@ -163,7 +235,35 @@ export function LoginPage() {
         setIsResetting(false)
       }
     } else {
-      if (!resetRoll || !resetEmail || !resetDob || !resetPassword) {
+      // Student forgot password flow is now 2 steps
+      if (forgotPasswordStep === 1) {
+        if (!resetRoll) {
+          setResetErrorMsg('Please enter your Roll Number first.')
+          return
+        }
+        setIsResetting(true)
+        try {
+          const res = await fetch('/api/auth/get-security-question', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ rollNumber: resetRoll })
+          })
+          const data = await res.json()
+          if (res.ok && data.success) {
+            setFetchedSecurityQuestion(data.question)
+            setForgotPasswordStep(2)
+          } else {
+            setResetErrorMsg(data.error || 'Failed to fetch security question')
+          }
+        } catch (err: any) {
+          setResetErrorMsg(err.message || 'Network error')
+        } finally {
+          setIsResetting(false)
+        }
+        return
+      }
+
+      if (!resetRoll || !resetEmail || !resetDob || !securityAnswer || !resetPassword) {
         setResetErrorMsg('Please fill in all fields.')
         return
       }
@@ -177,8 +277,9 @@ export function LoginPage() {
             rollNumber: resetRoll,
             email: resetEmail,
             dateOfBirth: resetDob,
-            newPassword: resetPassword,
-          }),
+            securityAnswer: securityAnswer,
+            newPassword: resetPassword
+          })
         })
 
         const data = await res.json()
@@ -192,7 +293,8 @@ export function LoginPage() {
         setResetEmail('')
         setResetDob('')
         setResetPassword('')
-
+        setSecurityAnswer('')
+        setForgotPasswordStep(1)
         setTimeout(() => {
           setIsForgotPassword(false)
           setResetSuccessMsg(null)
@@ -211,10 +313,12 @@ export function LoginPage() {
         <div className="flex flex-col justify-center px-6 py-12 md:px-12 lg:px-16">
           <div className="mx-auto w-full max-w-md">
             <div className="mb-8 flex items-center gap-2">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                <GraduationCap className="h-5 w-5" />
-              </div>
-              <span className="text-lg font-bold">PlacePro</span>
+              <img
+                src="/placego-logo.png"
+                alt="PlaceGO!"
+                className="h-9 w-9 rounded-lg object-contain"
+              />
+              <span className="text-lg font-bold">PlaceGO!</span>
             </div>
 
             {isForgotPassword ? (
@@ -245,7 +349,7 @@ export function LoginPage() {
                         </label>
                         <input
                           id="resetEmail"
-                          type="email"
+                          type="text"
                           value={resetEmail}
                           onChange={(e) => setResetEmail(e.target.value)}
                           placeholder="e.g. coordinator-it@college.edu"
@@ -287,40 +391,56 @@ export function LoginPage() {
                         />
                       </div>
 
-                      <div>
-                        <label htmlFor="resetEmail" className="text-sm font-medium">
-                          Registered Email Address
-                        </label>
-                        <input
-                          id="resetEmail"
-                          type="email"
-                          value={resetEmail}
-                          onChange={(e) => setResetEmail(e.target.value)}
-                          placeholder="e.g. aarav.sharma@college.edu"
-                          className="mt-1.5 h-11 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring text-foreground"
-                        />
-                      </div>
+                      {selectedRole === 'student' && forgotPasswordStep === 2 && (
+                        <>
+                          <div className="rounded-lg bg-muted p-4">
+                            <label className="text-sm font-semibold text-primary mb-2 block">Security Question</label>
+                            <p className="text-base text-foreground font-medium mb-3">{fetchedSecurityQuestion}</p>
+                            
+                            <label htmlFor="secAnswerForgot" className="text-sm font-medium">Your Answer</label>
+                            <input
+                              id="secAnswerForgot"
+                              type="text"
+                              value={securityAnswer}
+                              onChange={(e) => setSecurityAnswer(e.target.value)}
+                              placeholder="Answer here..."
+                              className="mt-1 h-11 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring"
+                            />
+                          </div>
 
-                      <div>
-                        <label htmlFor="resetDob" className="text-sm font-medium">
-                          Date of Birth (YYYY-MM-DD)
-                        </label>
-                        <input
-                          id="resetDob"
-                          type="text"
-                          value={resetDob}
-                          onChange={(e) => setResetDob(e.target.value)}
-                          placeholder="e.g. 2004-02-11"
-                          className="mt-1.5 h-11 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring text-foreground"
-                        />
-                      </div>
+                          <div>
+                            <label htmlFor="resetEmail" className="text-sm font-medium">Registered Email</label>
+                            <input
+                              id="resetEmail"
+                              type="email"
+                              value={resetEmail}
+                              onChange={(e) => setResetEmail(e.target.value)}
+                              placeholder="student@college.edu"
+                              className="mt-1 h-11 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring"
+                            />
+                          </div>
+
+                          <div>
+                            <label htmlFor="resetDob" className="text-sm font-medium">Date of Birth</label>
+                            <input
+                              id="resetDob"
+                              type="text"
+                              value={resetDob}
+                              onChange={(e) => setResetDob(e.target.value)}
+                              placeholder="DD/MM/YYYY or MM/DD/YY"
+                              className="mt-1 h-11 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring"
+                            />
+                          </div>
+                        </>
+                      )}
                     </>
                   )}
 
-                  <div>
-                    <label htmlFor="resetPassword" className="text-sm font-medium">
-                      New Password
-                    </label>
+                  {((selectedRole === 'student' && forgotPasswordStep === 2) || selectedRole === 'coordinator') && (
+                    <div>
+                      <label htmlFor="resetPassword" className="text-sm font-medium">
+                        New Password
+                      </label>
                     <input
                       id="resetPassword"
                       type="password"
@@ -330,6 +450,7 @@ export function LoginPage() {
                       className="mt-1.5 h-11 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring"
                     />
                   </div>
+                  )}
 
                   <div className="flex flex-col gap-3 pt-2">
                     <button
@@ -338,18 +459,127 @@ export function LoginPage() {
                       onClick={handleResetPassword}
                       className="flex h-11 w-full items-center justify-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground shadow-pop hover:opacity-95 disabled:opacity-50"
                     >
-                      {isResetting ? 'Resetting Password...' : 'Reset Password'}
+                      {isResetting ? 'Processing...' : (selectedRole === 'student' && forgotPasswordStep === 1) ? 'Continue' : 'Reset Password'}
                     </button>
                     <button
                       type="button"
                       onClick={() => {
-                        setIsForgotPassword(false)
-                        setResetErrorMsg(null)
-                        setResetSuccessMsg(null)
+                        if (selectedRole === 'student' && forgotPasswordStep === 2) {
+                          setForgotPasswordStep(1)
+                          setResetErrorMsg(null)
+                        } else {
+                          setIsForgotPassword(false)
+                          setResetErrorMsg(null)
+                          setResetSuccessMsg(null)
+                        }
                       }}
                       className="flex h-11 w-full items-center justify-center rounded-lg border border-input text-sm font-semibold hover:bg-muted"
                     >
-                      Back to Sign In
+                      {(selectedRole === 'student' && forgotPasswordStep === 2) ? 'Back' : 'Back to Sign In'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            ) : loginStep === 'setup-2fa' ? (
+              <div>
+                <h1 className="text-3xl font-bold tracking-tight">Set up 2FA</h1>
+                <p className="mt-2 text-muted-foreground">
+                  Scan the QR code with Google Authenticator or Authy to secure your account.
+                </p>
+                <div className="mt-8 flex flex-col items-center space-y-6">
+                  {qrCodeData && (
+                    <div className="rounded-xl border bg-white p-4 shadow-sm">
+                      <img src={qrCodeData} alt="QR Code" className="h-48 w-48" />
+                    </div>
+                  )}
+                  <form className="w-full space-y-5" onSubmit={(e) => { e.preventDefault(); handleVerify2FA(true); }}>
+                    {errorMsg && (
+                      <div className="rounded-lg bg-destructive/10 border border-destructive/20 p-3 text-xs text-destructive font-semibold">
+                        {errorMsg}
+                      </div>
+                    )}
+                    <div>
+                      <label htmlFor="otpCode" className="text-sm font-medium">Enter 6-digit Code</label>
+                      <input
+                        id="otpCode"
+                        type="text"
+                        maxLength={6}
+                        value={otpCode}
+                        onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                        placeholder="000000"
+                        className="mt-1.5 h-11 w-full rounded-lg border border-input bg-background px-3 text-center text-xl tracking-widest outline-none focus:border-ring focus:ring-2 focus:ring-ring"
+                      />
+                    </div>
+                    
+                    <div className="space-y-3 rounded-lg bg-muted p-4 border border-input">
+                      <h3 className="text-sm font-semibold text-primary mb-1">Set a Security Question</h3>
+                      <p className="text-xs text-muted-foreground leading-snug">This will be used to recover your account if you forget your password.</p>
+                      
+                      <div>
+                        <select
+                          value={securityQuestion}
+                          onChange={(e) => setSecurityQuestion(e.target.value)}
+                          className="mt-1.5 h-11 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring"
+                        >
+                          <option value="What is your favorite food?">What is your favorite food?</option>
+                          <option value="In what city were you born?">In what city were you born?</option>
+                          <option value="What is the name of your first pet?">What is the name of your first pet?</option>
+                          <option value="Who is your favorite person?">Who is your favorite person?</option>
+                        </select>
+                      </div>
+                      
+                      <div>
+                        <input
+                          type="text"
+                          value={securityAnswer}
+                          onChange={(e) => setSecurityAnswer(e.target.value)}
+                          placeholder="Your answer..."
+                          className="mt-1 h-11 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring"
+                        />
+                      </div>
+                    </div>
+                    
+                    <div className="flex flex-col gap-3 pt-2">
+                      <button type="submit" className="flex h-11 w-full items-center justify-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground shadow-pop hover:opacity-95">
+                        Verify and Enable 2FA
+                      </button>
+                      <button type="button" onClick={() => setLoginStep('password')} className="flex h-11 w-full items-center justify-center rounded-lg border border-input text-sm font-semibold hover:bg-muted">
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            ) : loginStep === 'verify-2fa' ? (
+              <div>
+                <h1 className="text-3xl font-bold tracking-tight">Two-Factor Authentication</h1>
+                <p className="mt-2 text-muted-foreground">
+                  Enter the 6-digit code from your authenticator app.
+                </p>
+                <form className="mt-8 space-y-5" onSubmit={(e) => { e.preventDefault(); handleVerify2FA(false); }}>
+                  {errorMsg && (
+                    <div className="rounded-lg bg-destructive/10 border border-destructive/20 p-3 text-xs text-destructive font-semibold">
+                      {errorMsg}
+                    </div>
+                  )}
+                  <div>
+                    <label htmlFor="otpCodeVerify" className="text-sm font-medium">Verification Code</label>
+                    <input
+                      id="otpCodeVerify"
+                      type="text"
+                      maxLength={6}
+                      value={otpCode}
+                      onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                      placeholder="000000"
+                      className="mt-1.5 h-14 w-full rounded-lg border border-input bg-background px-3 text-center text-2xl tracking-[0.5em] outline-none focus:border-ring focus:ring-2 focus:ring-ring"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-3 pt-2">
+                    <button type="submit" className="flex h-11 w-full items-center justify-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground shadow-pop hover:opacity-95">
+                      Verify Code
+                    </button>
+                    <button type="button" onClick={() => setLoginStep('password')} className="flex h-11 w-full items-center justify-center rounded-lg border border-input text-sm font-semibold hover:bg-muted">
+                      Back to Login
                     </button>
                   </div>
                 </form>
@@ -376,7 +606,7 @@ export function LoginPage() {
                             : 'border-input hover:bg-muted',
                         )}
                       >
-                        {role}
+                        {role === 'coordinator' ? 'HOD/Coordinator' : role}
                       </button>
                     ))}
                   </div>
@@ -398,7 +628,6 @@ export function LoginPage() {
                       type="text"
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
-                      readOnly={selectedRole !== 'student'}
                       placeholder={selectedRole === 'student' ? 'e.g. 21JR1A0501' : defaults.email}
                       className="mt-1.5 h-11 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring"
                     />
@@ -442,7 +671,7 @@ export function LoginPage() {
                     onClick={handleSignIn}
                     className="flex h-11 w-full items-center justify-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground shadow-pop hover:opacity-95"
                   >
-                    Sign in as {selectedRole}
+                    Sign in as {selectedRole === 'coordinator' ? 'HOD/Coordinator' : selectedRole}
                   </button>
                 </form>
               </div>
@@ -453,6 +682,11 @@ export function LoginPage() {
         <div className="relative hidden overflow-hidden bg-primary lg:flex lg:flex-col lg:justify-center lg:px-16">
           <div className="absolute inset-0 bg-gradient-to-br from-primary via-blue-700 to-blue-900 opacity-90" />
           <div className="relative z-10 max-w-lg text-white">
+            <img
+              src="/placego-logo.png"
+              alt="PlaceGO!"
+              className="h-20 w-20 rounded-2xl object-contain bg-white/10 p-2 mb-8 shadow-lg shadow-black/20"
+            />
             <h2 className="text-3xl font-bold leading-tight">Empowering campus placements</h2>
             <p className="mt-4 text-white/70">
               Unified platform for students and admins — built to scale across

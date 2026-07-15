@@ -167,7 +167,7 @@ export function AiAssistant({ portal }: AiAssistantProps) {
         className={`fixed bottom-6 right-6 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-tr from-primary to-indigo-600 text-white shadow-2xl transition-all duration-300 hover:scale-105 active:scale-95 ${
           isOpen ? 'rotate-90 opacity-0 pointer-events-none' : 'opacity-100'
         }`}
-        aria-label="Ask PlacePro AI"
+        aria-label="Ask PlaceGO! AI"
       >
         <div className="absolute inset-0 animate-ping rounded-full bg-primary/20 opacity-75" />
         <Sparkles className="relative h-6 w-6 animate-pulse" />
@@ -189,7 +189,7 @@ export function AiAssistant({ portal }: AiAssistantProps) {
             </div>
             <div>
               <div className="flex items-center gap-1.5">
-                <span className="text-sm font-bold text-foreground">PlacePro AI</span>
+                <span className="text-sm font-bold text-foreground">PlaceGO! AI</span>
                 <span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
               </div>
               <p className="text-[10px] text-muted-foreground font-medium capitalize">
@@ -235,7 +235,7 @@ export function AiAssistant({ portal }: AiAssistantProps) {
           <div className="border-b border-border bg-muted/50 p-4 text-xs">
             <div className="font-semibold text-foreground mb-1">Hugging Face Token Configuration</div>
             <p className="text-muted-foreground text-[10px] mb-3 leading-relaxed">
-              PlacePro is pre-configured with the default Hugging Face token. If it fails due to quota/network, you can override it with your own token below.
+              PlaceGO! is pre-configured with the default Hugging Face token. If it fails due to quota/network, you can override it with your own token below.
             </p>
             <div className="flex gap-2">
               <input
@@ -274,7 +274,7 @@ export function AiAssistant({ portal }: AiAssistantProps) {
                 <Sparkles className="h-6 w-6 animate-pulse" />
               </div>
               <div>
-                <h3 className="font-bold text-foreground">Welcome to PlacePro AI</h3>
+                <h3 className="font-bold text-foreground">Welcome to PlaceGO! AI</h3>
                 <p className="text-xs text-muted-foreground mt-1 max-w-[240px]">
                   Ask me anything about resume writing, drive preparation, placements, or coordination templates.
                 </p>

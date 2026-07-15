@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Calendar,
@@ -22,10 +22,12 @@ import {
   loadFormSubmissions,
   loadMasterRows,
   loadPlacementForms,
-  saveFormSubmissions,
   savePlacementForms,
+  saveFormSubmissions,
   loadCompanies,
   saveCompanies,
+  loadPlacementNotifications,
+  savePlacementNotifications,
   type FormFieldConfig,
   type FormSubmission,
   type MasterStudentRow,
@@ -33,6 +35,13 @@ import {
   type CompanyDrive,
   useStoreState,
 } from '../../lib/placeproStore'
+import {
+  useAcademicYearOptions,
+  getAcademicYearFromDate,
+  getAcademicYearFromYop,
+  normalizeAcademicYear,
+  useAcademicYear,
+} from '../../lib/AcademicYearContext'
 
 
 
@@ -56,6 +65,38 @@ function masterName(row: MasterStudentRow) {
 
 function masterBacklogs(row: MasterStudentRow) {
   return (row.noOfBacklogs || row.activeBacklogs || '0').trim()
+}
+
+function generateNextFormId(existingForms: PlacementForm[]): string {
+  let maxNum = 0
+  existingForms.forEach((f) => {
+    if (f.id) {
+      const match = f.id.match(/^FRM-(\d+)/i)
+      if (match) {
+        const num = parseInt(match[1], 10)
+        if (!Number.isNaN(num) && num > maxNum) {
+          maxNum = num
+        }
+      }
+    }
+  })
+  return `FRM-${String(maxNum + 1).padStart(3, '0')}`
+}
+
+function generateNextCompanyId(existingCompanies: CompanyDrive[]): string {
+  let maxNum = 0
+  existingCompanies.forEach((comp) => {
+    if (comp.id) {
+      const match = comp.id.match(/^COMP-(\d+)/i)
+      if (match) {
+        const num = parseInt(match[1], 10)
+        if (!Number.isNaN(num) && num > maxNum) {
+          maxNum = num
+        }
+      }
+    }
+  })
+  return `COMP-${String(maxNum + 1).padStart(3, '0')}`
 }
 
 function dedupeAndReconcile(
@@ -105,6 +146,21 @@ function dedupeAndReconcile(
   })
 }
 
+function getResponseCellValue(row: any, colKey: string, masterRow?: any) {
+  if (colKey === 'Roll Number') return row.roll
+  if (colKey === 'Student Name') return row.name
+  if (colKey === 'Submitted At') return row.submittedAt
+  if (colKey === 'Status') return row.status
+  if (colKey === '10th %') return masterRow?.tenthPercentage || row.values['10th %'] || row.values['10TH'] || ''
+  if (colKey === '12th %') return masterRow?.twelfthPercentage || row.values['12th %'] || row.values['12TH'] || ''
+  if (colKey === 'CGPA') return masterRow?.btechCgpa || row.values['CGPA'] || row.values['B.TECH CGPA'] || ''
+  if (colKey === 'Active Backlogs') return masterRow ? (masterRow.noOfBacklogs || masterRow.activeBacklogs || '0') : (row.values['Active Backlogs'] || row.values['NO OF BACKLOGS'] || '')
+  if (colKey === 'Branch') return masterRow?.branch || row.values['Branch'] || ''
+  if (colKey === 'Email') return masterRow?.mailId || row.values['Email'] || row.values['Mail ID'] || ''
+  if (colKey === 'Phone') return masterRow?.phoneNumber || row.values['Phone'] || row.values['Phone Number'] || ''
+  return row.values[colKey] || ''
+}
+
 function defaultField(type: FormFieldConfig['type'], label: string): FormFieldConfig {
   return {
     id: `fld-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -127,7 +183,9 @@ function defaultField(type: FormFieldConfig['type'], label: string): FormFieldCo
 
 export function AdminFormsPage() {
   const navigate = useNavigate()
-  const formsList = useStoreState(loadPlacementForms) ?? []
+  const { selectedYear } = useAcademicYear()
+  const yearOptions = useAcademicYearOptions()
+  const allForms = useStoreState(loadPlacementForms) ?? []
   const allSubmissions = useStoreState(loadFormSubmissions) ?? []
 
   const [filter, setFilter] = useState('All')
@@ -150,6 +208,13 @@ export function AdminFormsPage() {
   const [viewingFormId, setViewingFormId] = useState<string | null>(null)
   const [previewForm, setPreviewForm] = useState<PlacementForm | null>(null)
   const [responsesSearch, setResponsesSearch] = useState('')
+  const [selectedResponseColumns, setSelectedResponseColumns] = useState<string[]>([
+    'Roll Number',
+    'Student Name',
+    'Submitted At',
+    'Status'
+  ])
+  const [showResponseColSelector, setShowResponseColSelector] = useState(false)
 
   // Filter modal states before download
   const [isFilterModalOpen, setIsFilterModalOpen] = useState(false)
@@ -157,6 +222,7 @@ export function AdminFormsPage() {
   const [filterMinTwelfth, setFilterMinTwelfth] = useState('')
   const [filterMinCgpa, setFilterMinCgpa] = useState('')
   const [filterMaxBacklogs, setFilterMaxBacklogs] = useState('')
+  const [filterSpecialConcerns, setFilterSpecialConcerns] = useState('')
 
   // Associated company drive details states
   const [hasCompanyDrive, setHasCompanyDrive] = useState(false)
@@ -168,10 +234,30 @@ export function AdminFormsPage() {
   const [compJobType, setCompJobType] = useState('IT')
   const [compPkgMin, setCompPkgMin] = useState('')
   const [compPkgMax, setCompPkgMax] = useState('')
-  const [compAcademicYear, setCompAcademicYear] = useState('2025–26')
+  const [compMinCgpa, setCompMinCgpa] = useState('')
+  const [compMaxBacklogs, setCompMaxBacklogs] = useState('No Limit')
+  const [compAcademicYear, setCompAcademicYear] = useState(selectedYear)
   const [compRemarks, setCompRemarks] = useState('')
 
-  const masterRows = useStoreState(loadMasterRows) ?? []
+  const allMasterRows = useStoreState(loadMasterRows) ?? []
+  const formsList = useMemo(
+    () =>
+      allForms.filter((form) => {
+        const companyYear = normalizeAcademicYear(form.academicYear || form.companyAcademicYear || '')
+        const normalizedSelected = normalizeAcademicYear(selectedYear)
+        return companyYear
+          ? companyYear === normalizedSelected
+          : getAcademicYearFromDate(form.created) === normalizedSelected
+      }),
+    [allForms, selectedYear],
+  )
+  const masterRows = useMemo(
+    () =>
+      allMasterRows.filter(
+        (row) => (row.academicYear || getAcademicYearFromYop(row.btechYop)) === selectedYear,
+      ),
+    [allMasterRows, selectedYear],
+  )
 
 
 
@@ -180,6 +266,45 @@ export function AdminFormsPage() {
   const selectedForm = viewingFormId
     ? formsList.find((form) => form.id === viewingFormId) ?? null
     : null
+
+  const responseColumnsList = useMemo(() => {
+    if (!selectedForm) return []
+    const standardCols = [
+      { key: 'Roll Number', label: 'Roll Number', default: true },
+      { key: 'Student Name', label: 'Student Name', default: true },
+      { key: 'Submitted At', label: 'Submitted Timestamp', default: true },
+      { key: 'Status', label: 'Status', default: true },
+      { key: '10th %', label: '10th %', default: false },
+      { key: '12th %', label: '12th %', default: false },
+      { key: 'CGPA', label: 'CGPA', default: false },
+      { key: 'Active Backlogs', label: 'Active Backlogs', default: false },
+      { key: 'Branch', label: 'Branch', default: false },
+      { key: 'Email', label: 'Email', default: false },
+      { key: 'Phone', label: 'Phone', default: false },
+    ]
+    const standardKeys = new Set(standardCols.map((c) => c.key.toUpperCase()))
+    const customFields = selectedForm.fields
+      .filter((f) => !standardKeys.has(f.label.toUpperCase()))
+      .map((f) => ({
+        key: f.label,
+        label: f.label,
+        default: true,
+      }))
+    return [...standardCols, ...customFields]
+  }, [selectedForm])
+
+  const prevViewingFormIdForColsRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (viewingFormId !== prevViewingFormIdForColsRef.current) {
+      prevViewingFormIdForColsRef.current = viewingFormId
+      if (selectedForm && responseColumnsList.length > 0) {
+        const defaults = responseColumnsList.filter((col) => col.default).map((col) => col.key)
+        setSelectedResponseColumns(defaults)
+        setShowResponseColSelector(false)
+      }
+    }
+  }, [viewingFormId, responseColumnsList, selectedForm])
   const selectedSubmissions = useMemo(
     () => {
       const raw = allSubmissions.filter((submission) => submission.formId === viewingFormId)
@@ -203,7 +328,21 @@ export function AdminFormsPage() {
   }, [selectedSubmissions])
 
   const filteredCount = useMemo(() => {
-    return selectedSubmissions.filter((sub) => {
+    const specialRolls = new Set(
+      filterSpecialConcerns
+        .split(/[\s,]+/)
+        .map((r) => r.trim().toUpperCase())
+        .filter(Boolean)
+    )
+    const submittedRolls = new Set(selectedSubmissions.map((s) => s.roll.trim().toUpperCase()))
+    let extraSpecial = 0
+    specialRolls.forEach((r) => {
+      if (!submittedRolls.has(r)) extraSpecial++
+    })
+
+    const passing = selectedSubmissions.filter((sub) => {
+      if (specialRolls.has(sub.roll.trim().toUpperCase())) return true
+
       const masterRow = masterRows.find(
         (m) => m.rollNumber.trim().toUpperCase() === sub.roll.trim().toUpperCase()
       )
@@ -227,7 +366,16 @@ export function AdminFormsPage() {
       }
       return true
     }).length
-  }, [selectedSubmissions, masterRows, filterMinTenth, filterMinTwelfth, filterMinCgpa, filterMaxBacklogs])
+
+    return passing + extraSpecial
+  }, [selectedSubmissions, masterRows, filterMinTenth, filterMinTwelfth, filterMinCgpa, filterMaxBacklogs, filterSpecialConcerns])
+
+  useEffect(() => {
+    if (!viewingFormId) return
+    if (!formsList.some((form) => form.id === viewingFormId)) {
+      setViewingFormId(null)
+    }
+  }, [formsList, viewingFormId])
 
 
 
@@ -264,7 +412,9 @@ export function AdminFormsPage() {
     setCompJobType('IT')
     setCompPkgMin('')
     setCompPkgMax('')
-    setCompAcademicYear('2025–26')
+    setCompMinCgpa('')
+    setCompMaxBacklogs('No Limit')
+    setCompAcademicYear(selectedYear)
     setCompRemarks('')
   }
 
@@ -284,15 +434,14 @@ export function AdminFormsPage() {
     )
   }
 
-  function toggleStatus(id: string) {
+  async function toggleStatus(id: string) {
     const target = formsList.find((f) => f.id === id)
     if (!target) return
     const newStatus: PlacementForm['status'] = target.status === 'Active' ? 'Closed' : 'Active'
 
-    const updated = formsList.map((form) =>
-      form.id === id ? { ...form, status: newStatus } : form
+    await savePlacementForms(
+      allForms.map((form) => (form.id === id ? { ...form, status: newStatus } : form)),
     )
-    savePlacementForms(updated)
 
     if (newStatus === 'Closed') {
       const masterByRoll = new Map(
@@ -367,26 +516,26 @@ export function AdminFormsPage() {
         }
       })
 
-      saveFormSubmissions([...otherSubmissions, ...cleanedAndReconciled])
+      await saveFormSubmissions([...otherSubmissions, ...cleanedAndReconciled])
     }
     showToast('Form status updated.')
   }
 
-  function handleDelete(id: string) {
-    savePlacementForms(formsList.filter((form) => form.id !== id))
-    saveFormSubmissions(allSubmissions.filter((submission) => submission.formId !== id))
+  async function handleDelete(id: string) {
+    await savePlacementForms(allForms.filter((form) => form.id !== id))
+    await saveFormSubmissions(allSubmissions.filter((submission) => submission.formId !== id))
     const companies = loadCompanies() || []
     const updatedCompanies = companies.filter((c) => c.formId !== id)
-    saveCompanies(updatedCompanies)
+    await saveCompanies(updatedCompanies)
     showToast('Form deleted successfully.')
   }
 
-  function handleClone(id: string) {
+  async function handleClone(id: string) {
     const target = formsList.find((form) => form.id === id)
     if (!target) return
     const cloned: PlacementForm = {
       ...target,
-      id: `FRM-${String(formsList.length + 1).padStart(3, '0')}`,
+      id: generateNextFormId(allForms),
       name: `${target.name} Copy`,
       status: 'Draft',
       created: new Date().toISOString().split('T')[0],
@@ -394,8 +543,10 @@ export function AdminFormsPage() {
         ...field,
         id: `${field.id}-copy-${Math.random().toString(36).slice(2, 5)}`,
       })),
+      academicYear: selectedYear,
+      companyAcademicYear: target.hasCompanyDrive ? selectedYear : undefined,
     }
-    savePlacementForms([cloned, ...formsList])
+    await savePlacementForms([cloned, ...allForms])
     showToast('Form cloned successfully.')
   }
 
@@ -420,22 +571,24 @@ export function AdminFormsPage() {
     setCompJobType(target.companyJobType ?? 'IT')
     setCompPkgMin(target.companyPkgMin ?? '')
     setCompPkgMax(target.companyPkgMax ?? '')
-    setCompAcademicYear(target.companyAcademicYear ?? '2025–26')
+    setCompMinCgpa(target.companyMinCgpa ?? '')
+    setCompMaxBacklogs(target.companyMaxBacklogs ?? 'No Limit')
+    setCompAcademicYear(normalizeAcademicYear(target.companyAcademicYear) || selectedYear)
     setCompRemarks(target.companyRemarks ?? '')
     setIsOpen(true)
   }
 
-  function handleSaveForm(event: React.FormEvent) {
+  async function handleSaveForm(event: React.FormEvent) {
     event.preventDefault()
     if (!formName || !endDate || builderFields.length === 0) return
 
     const nextForm: PlacementForm = {
-      id: editingId ?? `FRM-${String(formsList.length + 1).padStart(3, '0')}`,
+      id: editingId ?? generateNextFormId(allForms),
       name: formName.trim(),
       type: formType,
       status: editingId ? formStatus : 'Active',
       created: editingId
-        ? formsList.find((form) => form.id === editingId)?.created ?? new Date().toISOString().split('T')[0]
+        ? allForms.find((form) => form.id === editingId)?.created ?? new Date().toISOString().split('T')[0]
         : new Date().toISOString().split('T')[0],
       startDate: startDate || new Date().toISOString().split('T')[0],
       startTime,
@@ -457,13 +610,15 @@ export function AdminFormsPage() {
       companyJobType: hasCompanyDrive ? compJobType : undefined,
       companyPkgMin: hasCompanyDrive ? compPkgMin : undefined,
       companyPkgMax: hasCompanyDrive ? compPkgMax : undefined,
-      companyAcademicYear: hasCompanyDrive ? compAcademicYear : undefined,
+      companyMinCgpa: hasCompanyDrive ? compMinCgpa : undefined,
+      companyMaxBacklogs: hasCompanyDrive ? compMaxBacklogs : undefined,
+      companyAcademicYear: hasCompanyDrive ? normalizeAcademicYear(compAcademicYear) || selectedYear : undefined,
       companyRemarks: hasCompanyDrive ? compRemarks.trim() : undefined,
+      academicYear: selectedYear,
     }
 
     if (editingId) {
-      const updated = formsList.map((form) => (form.id === editingId ? nextForm : form))
-      savePlacementForms(updated)
+      await savePlacementForms(allForms.map((form) => (form.id === editingId ? nextForm : form)))
       if (formStatus === 'Closed') {
         const masterByRoll = new Map(
           masterRows.map((row) => [row.rollNumber.trim().toUpperCase(), row]),
@@ -474,54 +629,29 @@ export function AdminFormsPage() {
 
         const byRoll = new Map<string, FormSubmission>()
         thisFormSubmissions.forEach((sub) => {
-          const cleanRoll = sub.roll.trim().toUpperCase()
-          byRoll.set(cleanRoll, sub)
+          byRoll.set(sub.roll.trim().toUpperCase(), sub)
         })
 
-        const cleanedAndReconciled = Array.from(byRoll.values()).map((sub) => {
-          const cleanRoll = sub.roll.trim().toUpperCase()
-          const masterRow = masterByRoll.get(cleanRoll)
+        const cleanedAndReconciled: FormSubmission[] = Array.from(byRoll.values()).map((sub) => {
+          const masterRow = masterByRoll.get(sub.roll.trim().toUpperCase())
           if (!masterRow) return sub
 
           const updatedValues = { ...sub.values }
-          Object.keys(sub.values).forEach((key) => {
-            const lowerKey = key.toLowerCase()
-            const val = (sub.values[key] || '').trim()
-            
-            if (lowerKey.includes('roll')) {
-              if (val !== masterRow.rollNumber.trim()) {
-                updatedValues[key] = masterRow.rollNumber.trim()
+          Object.entries(updatedValues).forEach(([key, val]) => {
+            const k = key.toLowerCase()
+            if (k.includes('cgpa') || k.includes('percentage') || k.includes('10th') || k.includes('12th')) {
+              if (k.includes('10th')) {
+                const tenth = (masterRow.tenthPercentage || '0').trim()
+                if (val !== tenth && parseFloat(tenth) > 0) updatedValues[key] = tenth
+              } else if (k.includes('12th')) {
+                const twelfth = (masterRow.twelfthPercentage || '0').trim()
+                if (val !== twelfth && parseFloat(twelfth) > 0) updatedValues[key] = twelfth
+              } else if (k.includes('cgpa')) {
+                const cgpa = (masterRow.btechCgpa || '0').trim()
+                if (val !== cgpa && parseFloat(cgpa) > 0) updatedValues[key] = cgpa
               }
-            } else if (lowerKey.includes('name')) {
-              const mName = masterName(masterRow)
-              if (val !== mName) {
-                updatedValues[key] = mName
-              }
-            } else if (lowerKey.includes('email') || lowerKey.includes('mail')) {
-              if (val !== masterRow.mailId.trim()) {
-                updatedValues[key] = masterRow.mailId.trim()
-              }
-            } else if (lowerKey.includes('phone') || lowerKey.includes('mobile')) {
-              if (val !== masterRow.phoneNumber.trim()) {
-                updatedValues[key] = masterRow.phoneNumber.trim()
-              }
-            } else if (lowerKey.includes('branch') || lowerKey.includes('dept')) {
-              if (val !== masterRow.branch.trim()) {
-                updatedValues[key] = masterRow.branch.trim()
-              }
-            } else if (lowerKey.includes('10th') || lowerKey.includes('tenth')) {
-              if (val !== masterRow.tenthPercentage.trim()) {
-                updatedValues[key] = masterRow.tenthPercentage.trim()
-              }
-            } else if (lowerKey.includes('12th') || lowerKey.includes('twelfth')) {
-              if (val !== masterRow.twelfthPercentage.trim()) {
-                updatedValues[key] = masterRow.twelfthPercentage.trim()
-              }
-            } else if (lowerKey.includes('cgpa')) {
-              if (val !== masterRow.btechCgpa.trim()) {
-                updatedValues[key] = masterRow.btechCgpa.trim()
-              }
-            } else if (lowerKey.includes('backlog')) {
+            }
+            if (k.includes('backlog')) {
               const backlogs = masterBacklogs(masterRow)
               if (val !== backlogs) {
                 updatedValues[key] = backlogs
@@ -540,12 +670,34 @@ export function AdminFormsPage() {
         saveFormSubmissions([...otherSubmissions, ...cleanedAndReconciled])
       }
       showToast('Form updated successfully.')
+      setIsOpen(false)
+      resetModal()
     } else {
-      savePlacementForms([nextForm, ...formsList])
-      showToast('Form published to the student dashboard.')
-      setTimeout(() => {
-        navigate('/student/drives')
-      }, 1000)
+      await savePlacementForms([nextForm, ...allForms])
+      
+      const notifications = loadPlacementNotifications() || []
+      notifications.unshift({
+        id: `notif-form-${Date.now()}`,
+        rollNumber: 'SYSTEM',
+        studentName: 'All Students',
+        company: `New Form Published: ${nextForm.name}`,
+        role: `A new ${nextForm.type} form has been published. Please check your forms section.`,
+        package: '-',
+        date: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        read: false,
+        type: 'announcement',
+      })
+      await savePlacementNotifications(notifications)
+      
+      showToast('Form published successfully.')
+      setIsOpen(false)
+      // Reset builder fields
+      setFormName('')
+      setFormType('Registration')
+      setStartDate('')
+      setEndDate('')
+      setBuilderFields([{ id: `fld-${Date.now()}`, label: 'Full Name', type: 'text', required: true, placeholder: 'Enter your full name' }])
     }
 
     // Automatically create or update the company drive
@@ -555,7 +707,7 @@ export function AdminFormsPage() {
       
       const companyPkg = `₹ ${compPkgMin}–${compPkgMax} LPA`
       const nextCompany: CompanyDrive = {
-        id: existingCompIndex !== -1 ? companies[existingCompIndex].id : `COMP-${String(companies.length + 1).padStart(3, '0')}`,
+        id: existingCompIndex !== -1 ? companies[existingCompIndex].id : generateNextCompanyId(companies),
         name: compName.trim(),
         sector: compSector,
         type: compCategory,
@@ -566,8 +718,10 @@ export function AdminFormsPage() {
         status: nextForm.status === 'Closed' ? 'Completed' : (nextForm.status === 'Active' ? 'Active' : 'Upcoming'),
         mode: compDriveMode,
         jobType: compJobType,
-        academicYear: compAcademicYear,
-        remarks: compRemarks.trim(),
+        academicYear: normalizeAcademicYear(compAcademicYear) || selectedYear,
+        remarks: (compRemarks.trim() + (compMinCgpa && compMinCgpa !== '0' ? ` [Min CGPA: ${compMinCgpa}]` : '') + (compMaxBacklogs && compMaxBacklogs !== 'No Limit' ? ` [Max Backlogs: ${compMaxBacklogs}]` : '')).trim(),
+        minCgpa: compMinCgpa,
+        maxBacklogs: compMaxBacklogs,
         formId: nextForm.id,
       }
 
@@ -576,7 +730,7 @@ export function AdminFormsPage() {
       } else {
         companies.push(nextCompany)
       }
-      saveCompanies(companies)
+      await saveCompanies(companies)
     }
 
     setIsOpen(false)
@@ -589,7 +743,40 @@ export function AdminFormsPage() {
 
     const subs = allSubmissions.filter((submission) => submission.formId === formId)
 
-    const filtered = subs.filter((sub) => {
+    const specialRolls = new Set(
+      filterSpecialConcerns
+        .split(/[\s,]+/)
+        .map((r) => r.trim().toUpperCase())
+        .filter(Boolean)
+    )
+
+    const byRoll = new Map<string, FormSubmission>()
+    subs.forEach((sub) => byRoll.set(sub.roll.trim().toUpperCase(), sub))
+
+    specialRolls.forEach((sRoll) => {
+      if (!byRoll.has(sRoll)) {
+        const mRow = masterRows.find((m) => m.rollNumber.trim().toUpperCase() === sRoll)
+        byRoll.set(sRoll, {
+          id: `special-override-${sRoll}-${formId}`,
+          formId,
+          roll: sRoll,
+          name: mRow ? (mRow.fullName || `${mRow.firstName} ${mRow.lastName}`.trim()) : 'Special Concern Student',
+          mail: mRow?.mailId || '',
+          values: {
+            Branch: mRow?.branch || '',
+            CGPA: mRow?.btechCgpa || '',
+            'NO OF BACKLOGS': mRow?.activeBacklogs || '0',
+          },
+          submittedAt: new Date().toISOString(),
+        } as any)
+      }
+    })
+
+    const allCandidateSubs = Array.from(byRoll.values())
+
+    const filtered = allCandidateSubs.filter((sub) => {
+      if (specialRolls.has(sub.roll.trim().toUpperCase())) return true
+
       const masterRow = masterRows.find(
         (m) => m.rollNumber.trim().toUpperCase() === sub.roll.trim().toUpperCase()
       )
@@ -618,29 +805,11 @@ export function AdminFormsPage() {
       const masterRow = masterRows.find(
         (m) => m.rollNumber.trim().toUpperCase() === submission.roll.trim().toUpperCase()
       )
-      
-      const basic = {
-        'Roll Number': submission.roll,
-        'Student Name': submission.name,
-        'Submitted At': submission.submittedAt,
-        Status: submission.status,
-      }
-
-      const academics = masterRow ? {
-        '10th %': masterRow.tenthPercentage,
-        '12th %': masterRow.twelfthPercentage,
-        'CGPA': masterRow.btechCgpa,
-        'Active Backlogs': masterBacklogs(masterRow),
-        'Branch': masterRow.branch,
-        'Email': masterRow.mailId,
-        'Phone': masterRow.phoneNumber,
-      } : {}
-
-      return {
-        ...basic,
-        ...academics,
-        ...submission.values,
-      }
+      const result: Record<string, string> = {}
+      selectedResponseColumns.forEach((colKey) => {
+        result[colKey] = getResponseCellValue(submission, colKey, masterRow)
+      })
+      return result
     })
 
     const worksheet = XLSX.utils.json_to_sheet(exportRows)
@@ -670,29 +839,11 @@ export function AdminFormsPage() {
       const masterRow = masterRows.find(
         (m) => m.rollNumber.trim().toUpperCase() === submission.roll.trim().toUpperCase()
       )
-      
-      const basic = {
-        'Roll Number': submission.roll,
-        'Student Name': submission.name,
-        'Submitted At': submission.submittedAt,
-        Status: submission.status,
-      }
-
-      const academics = masterRow ? {
-        '10th %': masterRow.tenthPercentage,
-        '12th %': masterRow.twelfthPercentage,
-        'CGPA': masterRow.btechCgpa,
-        'Active Backlogs': masterBacklogs(masterRow),
-        'Branch': masterRow.branch,
-        'Email': masterRow.mailId,
-        'Phone': masterRow.phoneNumber,
-      } : {}
-
-      return {
-        ...basic,
-        ...academics,
-        ...submission.values,
-      }
+      const result: Record<string, string> = {}
+      selectedResponseColumns.forEach((colKey) => {
+        result[colKey] = getResponseCellValue(submission, colKey, masterRow)
+      })
+      return result
     })
 
     const worksheet = XLSX.utils.json_to_sheet(exportRows)
@@ -1067,8 +1218,11 @@ export function AdminFormsPage() {
                             onChange={(e) => setCompAcademicYear(e.target.value)}
                             className="mt-1.5 h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring"
                           >
-                            <option value="2025–26">2025–26</option>
-                            <option value="2026–27">2026–27</option>
+                            {yearOptions.map((year) => (
+                              <option key={year} value={year}>
+                                {year}
+                              </option>
+                            ))}
                           </select>
                         </div>
                         <div className="grid grid-cols-2 gap-2">
@@ -1087,13 +1241,40 @@ export function AdminFormsPage() {
                             <label className="text-[10px] font-semibold text-muted-foreground uppercase">Max Pkg (LPA)</label>
                             <input
                               type="number"
-                              required
                               placeholder="Max"
                               value={compPkgMax}
                               onChange={(e) => setCompPkgMax(e.target.value)}
                               className="mt-1 h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring"
                             />
                           </div>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2 border border-primary/20 bg-primary/5 p-3 rounded-lg">
+                        <div>
+                          <label className="text-[11px] font-bold text-primary uppercase block">Min CGPA Required</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            placeholder="e.g. 7.0 (0 for no cutoff)"
+                            value={compMinCgpa}
+                            onChange={(e) => setCompMinCgpa(e.target.value)}
+                            className="mt-1 h-10 w-full rounded-lg border border-input bg-background px-3 text-sm font-mono outline-none transition focus:border-ring focus:ring-2 focus:ring-ring"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] font-bold text-primary uppercase block">Max Active Backlogs Allowed</label>
+                          <select
+                            value={compMaxBacklogs}
+                            onChange={(e) => setCompMaxBacklogs(e.target.value)}
+                            className="mt-1 h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring"
+                          >
+                            <option value="No Limit">No Limit</option>
+                            <option value="0">0 (No Active Backlogs)</option>
+                            <option value="1">At most 1 Backlog</option>
+                            <option value="2">At most 2 Backlogs</option>
+                            <option value="3">At most 3 Backlogs</option>
+                          </select>
                         </div>
                       </div>
 
@@ -1412,6 +1593,17 @@ export function AdminFormsPage() {
               <div className="flex gap-2">
                 <button
                   type="button"
+                  onClick={() => setShowResponseColSelector(!showResponseColSelector)}
+                  className={`inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-xs font-semibold cursor-pointer transition-colors ${
+                    showResponseColSelector
+                      ? 'border-primary bg-primary text-primary-foreground font-semibold'
+                      : 'border-input bg-background hover:bg-muted text-foreground'
+                  }`}
+                >
+                  Columns
+                </button>
+                <button
+                  type="button"
                   onClick={() => navigate(`/admin/placements?tab=comparison&formId=${selectedForm.id}`)}
                   className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-input px-3 text-xs font-semibold hover:bg-muted text-primary cursor-pointer"
                 >
@@ -1424,6 +1616,7 @@ export function AdminFormsPage() {
                     setFilterMinTwelfth('')
                     setFilterMinCgpa('')
                     setFilterMaxBacklogs('')
+                    setFilterSpecialConcerns('')
                     setIsFilterModalOpen(true)
                   }}
                   className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-input px-3 text-xs font-semibold hover:bg-muted"
@@ -1432,6 +1625,53 @@ export function AdminFormsPage() {
                 </button>
               </div>
             </div>
+
+            {/* Collapsible Column Selector */}
+            {showResponseColSelector && (
+              <div className="mb-4 rounded-xl border border-border bg-muted/20 p-4 animate-in slide-in-from-top-2 duration-200">
+                <div className="mb-3 flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                  <span>Select columns to display & download</span>
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedResponseColumns(responseColumnsList.map((c) => c.key))}
+                      className="text-primary hover:underline font-bold normal-case cursor-pointer text-xs"
+                    >
+                      Select All
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedResponseColumns(responseColumnsList.filter((c) => c.default).map((c) => c.key))}
+                      className="text-primary hover:underline font-bold normal-case cursor-pointer text-xs"
+                    >
+                      Reset Defaults
+                    </button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 max-h-40 overflow-y-auto pr-1">
+                  {responseColumnsList.map((col) => (
+                    <label
+                      key={col.key}
+                      className="flex cursor-pointer items-center gap-2 rounded border border-border bg-background p-2 text-xs hover:bg-muted/40 transition-colors"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedResponseColumns.includes(col.key)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedResponseColumns([...selectedResponseColumns, col.key])
+                          } else {
+                            setSelectedResponseColumns(selectedResponseColumns.filter((k) => k !== col.key))
+                          }
+                        }}
+                        className="rounded border-input text-primary focus:ring-primary h-3.5 w-3.5"
+                      />
+                      <span className="font-medium text-foreground truncate">{col.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="mb-4 rounded-lg border border-success/20 bg-success/15 p-3 text-xs text-success">
               Duplicate submissions are cleaned internally using the latest submission per roll number, then verified against master data before export.
@@ -1485,34 +1725,53 @@ export function AdminFormsPage() {
               <table className="w-full text-xs text-left">
                 <thead>
                   <tr className="border-b border-border bg-muted/30 text-muted-foreground">
-                    <th className="px-4 py-2 font-medium">Roll Number</th>
-                    <th className="px-4 py-2 font-medium">Student Name</th>
-                    <th className="px-4 py-2 font-medium">Submitted Timestamp</th>
-                    <th className="px-4 py-2 font-medium">Status</th>
+                    {responseColumnsList.filter((col) => selectedResponseColumns.includes(col.key)).map((col) => (
+                      <th key={col.key} className="px-4 py-2 font-medium">
+                        {col.label}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredResponses.map((row) => (
-                    <tr key={row.id} className="border-b border-border last:border-0 hover:bg-muted/30">
-                      <td className="px-4 py-2 font-mono">{row.roll.trim()}</td>
-                      <td className="px-4 py-2 font-semibold">{row.name.trim()}</td>
-                      <td className="px-4 py-2 font-mono text-muted-foreground">{row.submittedAt}</td>
-                      <td className="px-4 py-2">
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                            row.status === 'Approved'
-                              ? 'bg-success/10 text-success'
-                              : 'bg-warning/15 text-warning-foreground'
-                          }`}
-                        >
-                          {row.status}
-                        </span>
-                      </td>
+                  {filteredResponses.map((row) => {
+                    const masterRow = masterRows.find(
+                      (m) => m.rollNumber.trim().toUpperCase() === row.roll.trim().toUpperCase()
+                    )
+                    return (
+                      <tr key={row.id} className="border-b border-border last:border-0 hover:bg-muted/30">
+                        {responseColumnsList.filter((col) => selectedResponseColumns.includes(col.key)).map((col) => {
+                          const val = getResponseCellValue(row, col.key, masterRow)
+                          if (col.key === 'Status') {
+                            return (
+                              <td key={col.key} className="px-4 py-2">
+                                <span
+                                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                    val === 'Approved'
+                                      ? 'bg-success/10 text-success'
+                                      : 'bg-warning/15 text-warning-foreground'
+                                  }`}
+                                >
+                                  {val}
+                                </span>
+                            </td>
+                          )
+                        }
+                        return (
+                          <td
+                            key={col.key}
+                            className={`px-4 py-2 ${col.key === 'Roll Number' || col.key === 'Submitted At' ? 'font-mono' : ''} ${
+                              col.key === 'Student Name' ? 'font-semibold text-foreground' : 'text-muted-foreground'
+                            }`}
+                          >
+                            {val}
+                          </td>
+                        )
+                      })}
                     </tr>
-                  ))}
+                  )})}
                   {filteredResponses.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="px-4 py-6 text-center text-muted-foreground">
+                      <td colSpan={selectedResponseColumns.length || 1} className="px-4 py-6 text-center text-muted-foreground">
                         No student responses found for this form.
                       </td>
                     </tr>
@@ -1597,6 +1856,18 @@ export function AdminFormsPage() {
                     className="mt-1.5 h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring"
                   />
                 </div>
+              </div>
+
+              <div className="border border-primary/20 bg-primary/5 p-3 rounded-lg space-y-1">
+                <label className="text-xs font-bold text-primary uppercase block">Allow Special Concern / Override Rolls</label>
+                <p className="text-[11px] text-muted-foreground">Enter Roll Numbers separated by commas to allow without eligibility checks (e.g. 21A91A0501, 21A91A0502)</p>
+                <input
+                  type="text"
+                  placeholder="Roll Numbers..."
+                  value={filterSpecialConcerns}
+                  onChange={(e) => setFilterSpecialConcerns(e.target.value)}
+                  className="mt-1 h-9 w-full rounded-lg border border-input bg-background px-3 text-xs font-mono outline-none transition focus:border-ring"
+                />
               </div>
 
               <div className="rounded-xl bg-primary/10 border border-primary/20 px-4 py-3.5 text-center">
