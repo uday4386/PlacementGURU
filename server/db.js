@@ -52,7 +52,18 @@ export const query = async (text, params) => {
 };
 
 export async function setupDatabase() {
-  const targetDb = 'placepro';
+  // Extract database name from connection URL dynamically
+  let targetDb = 'placepro';
+  try {
+    const urlString = connectionString.includes('?') ? connectionString.split('?')[0] : connectionString;
+    const parts = urlString.split('/');
+    const dbName = parts[parts.length - 1];
+    if (dbName) {
+      targetDb = dbName;
+    }
+  } catch (e) {
+    console.warn('Could not parse database name from connection string, using placepro');
+  }
   
   // Create base connection string pointing to the default postgres database
   let baseConnectionString = connectionString;
